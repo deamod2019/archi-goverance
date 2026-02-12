@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>架构治理系统</title>
+    <link href="https://fonts.loli.net/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+    <div class="app">
+        <nav class="sidebar" id="sidebar">
+            <div class="logo">
+                <div class="logo-icon">🏛</div>
+                <div class="logo-text">架构治理</div>
+            </div>
+            <div class="nav-section">
+                <div class="nav-label">架构全景图</div>
+                <a class="nav-item active" data-view="v1" onclick="switchView('v1')"><span
+                        class="nav-icon">🏢</span>业务能力</a>
+                <a class="nav-item" data-view="v2" onclick="switchView('v2')"><span class="nav-icon">🔗</span>应用依赖</a>
+                <a class="nav-item" data-view="v3" onclick="switchView('v3')"><span class="nav-icon">🖥</span>部署拓扑</a>
+                <a class="nav-item" data-view="v4" onclick="switchView('v4')"><span class="nav-icon">🗄</span>数据库</a>
+                <a class="nav-item" data-view="v5" onclick="switchView('v5')"><span class="nav-icon">📡</span>中间件</a>
+                <a class="nav-item" data-view="v6" onclick="switchView('v6')"><span class="nav-icon">🌐</span>流量链路</a>
+                <a class="nav-item" data-view="v7" onclick="switchView('v7')"><span class="nav-icon">📊</span>技术标准</a>
+                <a class="nav-item" data-view="v8" onclick="switchView('v8')"><span class="nav-icon">👁</span>运行态对比</a>
+                <a class="nav-item" data-view="standards" onclick="switchView('standards')"><span
+                        class="nav-icon">📜</span>架构规范</a>
+            </div>
+            <div class="nav-section">
+                <div class="nav-label">架构评审</div>
+                <a class="nav-item" data-view="review" onclick="switchView('review')"><span
+                        class="nav-icon">📋</span>立项评审<span class="badge">3</span></a>
+                <a class="nav-item" data-view="dashboard" onclick="switchView('dashboard')"><span
+                        class="nav-icon">📈</span>评审看板</a>
+            </div>
+        </nav>
+        <main class="main">
+            <header class="topbar">
+                <div class="breadcrumb" id="breadcrumb">全景图 &gt; 业务能力视角</div>
+                <div class="topbar-right">
+                    <input class="search-input" placeholder="搜索应用/系统/域..." id="globalSearch">
+                    <div class="user-avatar">张</div>
+                </div>
+            </header>
+            <div class="content" id="content"></div>
+        </main>
+    </div>
+    <script src="data.js"></script>
+    <script src="app.js"></script>
+</body>
+
+</html>
