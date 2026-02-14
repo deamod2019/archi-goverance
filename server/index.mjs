@@ -1818,6 +1818,111 @@ function normalizeApplicationInput(raw, fallbackId) {
   return result;
 }
 
+function normalizeDependencyInput(raw) {
+  const source = String(raw?.source || '').trim();
+  const target = String(raw?.target || '').trim();
+  const type = String(raw?.type || raw?.depType || '').trim().toUpperCase() || 'SYNC_API';
+  const crit = String(raw?.crit || raw?.criticality || '').trim().toUpperCase() || 'MEDIUM';
+  const allowedType = ['SYNC_API', 'ASYNC_MQ', 'DB_SHARE', 'FILE_TRANSFER', 'EVENT_STREAM', 'UNKNOWN'];
+  const allowedCrit = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+  if (!source) throw new HttpError(400, 'dependency.source is required');
+  if (!target) throw new HttpError(400, 'dependency.target is required');
+  if (!allowedType.includes(type)) {
+    throw new HttpError(400, `dependency.type must be one of: ${allowedType.join(', ')}`);
+  }
+  if (!allowedCrit.includes(crit)) {
+    throw new HttpError(400, `dependency.crit must be one of: ${allowedCrit.join(', ')}`);
+  }
+  return { source, target, type, crit };
+}
+
+function normalizeDbClusterInput(raw, fallbackId) {
+  const id = String(raw?.id || fallbackId || '').trim();
+  const name = String(raw?.name || '').trim();
+  const type = String(raw?.type || '').trim();
+  const mode = String(raw?.mode || '').trim() || '主从';
+  const instances = normalizeNonNegativeInt(raw?.instances, 'databaseCluster.instances', 0);
+  const apps = normalizeNonNegativeInt(raw?.apps, 'databaseCluster.apps', 0);
+  const dr = String(raw?.dr || 'none').trim().toLowerCase();
+  const dc = String(raw?.dc || '').trim();
+  if (!id) throw new HttpError(400, 'database cluster id is required');
+  if (!name) throw new HttpError(400, 'database cluster name is required');
+  if (!type) throw new HttpError(400, 'database cluster type is required');
+  if (!['ok', 'warn', 'none'].includes(dr)) {
+    throw new HttpError(400, 'database cluster dr must be one of: ok, warn, none');
+  }
+  return { id, name, type, mode, instances, apps, dr, dc };
+}
+
+function normalizeMwClusterInput(raw, fallbackId) {
+  const id = String(raw?.id || fallbackId || '').trim();
+  const name = String(raw?.name || '').trim();
+  const type = String(raw?.type || '').trim().toUpperCase();
+  const product = String(raw?.product || '').trim();
+  const instances = normalizeNonNegativeInt(raw?.instances, 'middlewareCluster.instances', 0);
+  const producers = normalizeNonNegativeInt(raw?.producers, 'middlewareCluster.producers', 0);
+  const consumers = normalizeNonNegativeInt(raw?.consumers, 'middlewareCluster.consumers', 0);
+  const health = String(raw?.health || 'healthy').trim().toLowerCase();
+  if (!id) throw new HttpError(400, 'middleware cluster id is required');
+  if (!name) throw new HttpError(400, 'middleware cluster name is required');
+  if (!type) throw new HttpError(400, 'middleware cluster type is required');
+  if (!product) throw new HttpError(400, 'middleware cluster product is required');
+  if (!['healthy', 'warn', 'down'].includes(health)) {
+    throw new HttpError(400, 'middleware cluster health must be one of: healthy, warn, down');
+  }
+  return { id, name, type, product, instances, producers, consumers, health };
+}
+
+async function resolveDependencyNodePayload(client, nodeId) {
+  const existing = await client.query('SELECT payload FROM dependency_nodes WHERE id = $1', [nodeId]);
+  if (existing.rows.length) {
+    const payload = existing.rows[0].payload || {};
+    return {
+      ...payload,
+      id: nodeId,
+      name: String(payload.name || nodeId),
+      domain: String(payload.domain || 'unknown')
+    };
+  }
+  const appRes = await client.query(
+    `
+    SELECT
+      a.payload AS app_payload,
+      sy.domain_id
+    FROM applications a
+    JOIN subsystems ss ON ss.id = a.subsystem_id
+    JOIN systems sy ON sy.id = ss.system_id
+    WHERE a.id = $1
+    `,
+    [nodeId]
+  );
+  if (appRes.rows.length) {
+    return {
+      id: nodeId,
+      name: String(appRes.rows[0].app_payload?.name || nodeId),
+      domain: appRes.rows[0].domain_id
+    };
+  }
+  return { id: nodeId, name: nodeId, domain: 'unknown' };
+}
+
+async function ensureDependencyNodes(client, ...nodeIds) {
+  for (const rawId of nodeIds) {
+    const nodeId = String(rawId || '').trim();
+    if (!nodeId) continue;
+    const payload = await resolveDependencyNodePayload(client, nodeId);
+    await client.query(
+      `
+      INSERT INTO dependency_nodes (id, payload)
+      VALUES ($1, $2::jsonb)
+      ON CONFLICT (id)
+      DO UPDATE SET payload = EXCLUDED.payload
+      `,
+      [nodeId, JSON.stringify(payload)]
+    );
+  }
+}
+
 async function recomputeDomainStats(client, domainId) {
   const statsRes = await client.query(
     `
@@ -2569,6 +2674,92 @@ async function handleApi(req, res, url) {
     }
 
     sendJson(res, 200, { nodes, edges });
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/dependencies') {
+    const source = url.searchParams.get('source');
+    const target = url.searchParams.get('target');
+    const type = url.searchParams.get('type');
+    const criticality = url.searchParams.get('criticality');
+    const { rows } = await pool.query('SELECT id, source, target, dep_type, criticality, payload FROM dependencies ORDER BY id');
+    let data = rows.map((row) => ({
+      id: Number(row.id),
+      ...row.payload,
+      source: row.source,
+      target: row.target,
+      type: String(row.payload?.type || row.dep_type || 'UNKNOWN').toUpperCase(),
+      crit: String(row.payload?.crit || row.criticality || 'MEDIUM').toUpperCase()
+    }));
+    if (source) data = data.filter((d) => d.source === source);
+    if (target) data = data.filter((d) => d.target === target);
+    if (type) data = data.filter((d) => String(d.type).toUpperCase() === String(type).toUpperCase());
+    if (criticality) data = data.filter((d) => String(d.crit).toUpperCase() === String(criticality).toUpperCase());
+    sendJson(res, 200, data);
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/panorama/dependencies') {
+    const body = await readJsonBody(req);
+    const dep = normalizeDependencyInput(body);
+    const result = await withTransaction(async (client) => {
+      await ensureDependencyNodes(client, dep.source, dep.target);
+      const saved = await client.query(
+        `
+        INSERT INTO dependencies (source, target, dep_type, criticality, payload)
+        VALUES ($1, $2, $3, $4, $5::jsonb)
+        RETURNING id
+        `,
+        [dep.source, dep.target, dep.type, dep.crit, JSON.stringify(dep)]
+      );
+      return { id: Number(saved.rows[0].id), ...dep };
+    });
+    sendJson(res, 201, result);
+    return true;
+  }
+
+  const dependencyItemMatch = url.pathname.match(/^\/api\/v1\/panorama\/dependencies\/(\d+)$/);
+  if (req.method === 'PUT' && dependencyItemMatch) {
+    const depId = Number.parseInt(dependencyItemMatch[1], 10);
+    const body = await readJsonBody(req);
+    const result = await withTransaction(async (client) => {
+      const current = await client.query('SELECT source, target, dep_type, criticality, payload FROM dependencies WHERE id = $1', [depId]);
+      if (!current.rows.length) throw new HttpError(404, 'dependency not found');
+      const merged = {
+        ...current.rows[0].payload,
+        source: body?.source ?? current.rows[0].source,
+        target: body?.target ?? current.rows[0].target,
+        type: body?.type ?? current.rows[0].dep_type,
+        crit: body?.crit ?? current.rows[0].criticality
+      };
+      const next = normalizeDependencyInput(merged);
+      await ensureDependencyNodes(client, next.source, next.target);
+      await client.query(
+        `
+        UPDATE dependencies
+        SET source = $2,
+            target = $3,
+            dep_type = $4,
+            criticality = $5,
+            payload = $6::jsonb
+        WHERE id = $1
+        `,
+        [depId, next.source, next.target, next.type, next.crit, JSON.stringify(next)]
+      );
+      return { id: depId, ...next };
+    });
+    sendJson(res, 200, result);
+    return true;
+  }
+
+  if (req.method === 'DELETE' && dependencyItemMatch) {
+    const depId = Number.parseInt(dependencyItemMatch[1], 10);
+    const deleted = await pool.query('DELETE FROM dependencies WHERE id = $1 RETURNING id', [depId]);
+    if (!deleted.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'dependency not found' });
+      return true;
+    }
+    sendJson(res, 200, { id: depId, deleted: true });
     return true;
   }
 
@@ -3432,6 +3623,61 @@ async function handleApi(req, res, url) {
     return true;
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/v1/panorama/database-clusters') {
+    const body = await readJsonBody(req);
+    const cluster = normalizeDbClusterInput(body);
+    try {
+      await pool.query('INSERT INTO database_clusters (id, payload) VALUES ($1, $2::jsonb)', [cluster.id, JSON.stringify(cluster)]);
+    } catch (error) {
+      if (String(error.code) === '23505') {
+        throw new HttpError(409, `database cluster '${cluster.id}' already exists`);
+      }
+      throw error;
+    }
+    sendJson(res, 201, cluster);
+    return true;
+  }
+
+  const dbClusterItemMatch = url.pathname.match(/^\/api\/v1\/panorama\/database-clusters\/([^/]+)$/);
+  if (req.method === 'PUT' && dbClusterItemMatch) {
+    const clusterId = decodeURIComponent(dbClusterItemMatch[1]);
+    const body = await readJsonBody(req);
+    const current = await pool.query('SELECT payload FROM database_clusters WHERE id = $1', [clusterId]);
+    if (!current.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'database cluster not found' });
+      return true;
+    }
+    const merged = { ...current.rows[0].payload, ...body, id: clusterId };
+    const next = normalizeDbClusterInput(merged, clusterId);
+    await pool.query('UPDATE database_clusters SET payload = $2::jsonb, updated_at = now() WHERE id = $1', [clusterId, JSON.stringify(next)]);
+    sendJson(res, 200, next);
+    return true;
+  }
+
+  if (req.method === 'DELETE' && dbClusterItemMatch) {
+    const clusterId = decodeURIComponent(dbClusterItemMatch[1]);
+    const summaryRes = await pool.query(
+      `
+      SELECT
+        (SELECT COUNT(*)::int FROM database_instances WHERE cluster_id = $1) AS instances,
+        (SELECT COUNT(*)::int FROM database_cluster_apps WHERE cluster_id = $1) AS app_relations,
+        (
+          SELECT COUNT(*)::int
+          FROM database_dr
+          WHERE primary_cluster_id = $1 OR standby_cluster_id = $1
+        ) AS dr_links
+      `,
+      [clusterId]
+    );
+    const deleted = await pool.query('DELETE FROM database_clusters WHERE id = $1 RETURNING id', [clusterId]);
+    if (!deleted.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'database cluster not found' });
+      return true;
+    }
+    sendJson(res, 200, { id: clusterId, deleted: true, cascade: summaryRes.rows[0] || {} });
+    return true;
+  }
+
   const dbDetailMatch = url.pathname.match(/^\/api\/v1\/panorama\/database-clusters\/([^/]+)\/detail$/);
   if (req.method === 'GET' && dbDetailMatch) {
     const clusterId = decodeURIComponent(dbDetailMatch[1]);
@@ -3477,6 +3723,56 @@ async function handleApi(req, res, url) {
     if (type) clusters = clusters.filter((c) => String(c.type).toUpperCase() === String(type).toUpperCase());
     if (health) clusters = clusters.filter((c) => String(c.health).toUpperCase() === String(health).toUpperCase());
     sendJson(res, 200, projectData(clusters, fields));
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/panorama/middleware-clusters') {
+    const body = await readJsonBody(req);
+    const cluster = normalizeMwClusterInput(body);
+    try {
+      await pool.query('INSERT INTO middleware_clusters (id, payload) VALUES ($1, $2::jsonb)', [cluster.id, JSON.stringify(cluster)]);
+    } catch (error) {
+      if (String(error.code) === '23505') {
+        throw new HttpError(409, `middleware cluster '${cluster.id}' already exists`);
+      }
+      throw error;
+    }
+    sendJson(res, 201, cluster);
+    return true;
+  }
+
+  const mwClusterItemMatch = url.pathname.match(/^\/api\/v1\/panorama\/middleware-clusters\/([^/]+)$/);
+  if (req.method === 'PUT' && mwClusterItemMatch) {
+    const clusterId = decodeURIComponent(mwClusterItemMatch[1]);
+    const body = await readJsonBody(req);
+    const current = await pool.query('SELECT payload FROM middleware_clusters WHERE id = $1', [clusterId]);
+    if (!current.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'middleware cluster not found' });
+      return true;
+    }
+    const merged = { ...current.rows[0].payload, ...body, id: clusterId };
+    const next = normalizeMwClusterInput(merged, clusterId);
+    await pool.query('UPDATE middleware_clusters SET payload = $2::jsonb, updated_at = now() WHERE id = $1', [clusterId, JSON.stringify(next)]);
+    sendJson(res, 200, next);
+    return true;
+  }
+
+  if (req.method === 'DELETE' && mwClusterItemMatch) {
+    const clusterId = decodeURIComponent(mwClusterItemMatch[1]);
+    const summaryRes = await pool.query(
+      `
+      SELECT
+        (SELECT COUNT(*)::int FROM middleware_instances WHERE cluster_id = $1) AS instances,
+        (SELECT COUNT(*)::int FROM middleware_cluster_apps WHERE cluster_id = $1) AS app_relations
+      `,
+      [clusterId]
+    );
+    const deleted = await pool.query('DELETE FROM middleware_clusters WHERE id = $1 RETURNING id', [clusterId]);
+    if (!deleted.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'middleware cluster not found' });
+      return true;
+    }
+    sendJson(res, 200, { id: clusterId, deleted: true, cascade: summaryRes.rows[0] || {} });
     return true;
   }
 

@@ -244,13 +244,16 @@ const PANORAMA_ENTITY_META = {
   domain: { label: '业务域', path: '/api/v1/panorama/domains' },
   system: { label: '系统', path: '/api/v1/panorama/systems' },
   subsystem: { label: '子系统', path: '/api/v1/panorama/subsystems' },
-  application: { label: '应用', path: '/api/v1/panorama/applications' }
+  application: { label: '应用', path: '/api/v1/panorama/applications' },
+  dependency: { label: '依赖关系', path: '/api/v1/panorama/dependencies' },
+  dbCluster: { label: '数据库集群', path: '/api/v1/panorama/database-clusters' },
+  mwCluster: { label: '中间件集群', path: '/api/v1/panorama/middleware-clusters' }
 };
 
 function getPanoramaAdminData() {
   const state = VIEW_CACHE.panoramaAdminData;
   if (state?.status === 'ready' && state.data) return state.data;
-  return { domains: [], systems: [], subsystems: [], applications: [] };
+  return { domains: [], systems: [], subsystems: [], applications: [], dependencies: [], dbClusters: [], mwClusters: [] };
 }
 
 function fetchPanoramaAdminData() {
@@ -258,18 +261,24 @@ function fetchPanoramaAdminData() {
     apiRequest('/api/v1/panorama/domains'),
     apiRequest('/api/v1/panorama/systems'),
     apiRequest('/api/v1/panorama/subsystems'),
-    apiRequest('/api/v1/panorama/applications')
-  ]).then(([domains, systems, subsystems, applications]) => ({
+    apiRequest('/api/v1/panorama/applications'),
+    apiRequest('/api/v1/panorama/dependencies'),
+    apiRequest('/api/v1/panorama/database-clusters'),
+    apiRequest('/api/v1/panorama/middleware-clusters')
+  ]).then(([domains, systems, subsystems, applications, dependencies, dbClusters, mwClusters]) => ({
     domains: domains || [],
     systems: systems || [],
     subsystems: subsystems || [],
-    applications: applications || []
+    applications: applications || [],
+    dependencies: dependencies || [],
+    dbClusters: dbClusters || [],
+    mwClusters: mwClusters || []
   }));
 }
 
 function clearPanoramaViewCaches() {
   Object.keys(VIEW_CACHE).forEach((key) => {
-    if (key === 'panoramaAdminData' || key === 'v1Domains' || key === 'v2Graph' || key.startsWith('v1-')) {
+    if (key === 'panoramaAdminData' || key === 'v1Domains' || key === 'v2Graph' || key === 'v4Db' || key === 'v5Mw' || key.startsWith('v1-')) {
       delete VIEW_CACHE[key];
     }
   });
@@ -350,15 +359,47 @@ function defaultPanoramaEntityTemplate(entityType) {
       tags: []
     };
   }
+  if (entityType === 'application') {
+    return {
+      id: `app-${Date.now()}`,
+      subsystemId: data.subsystems[0]?.id || '',
+      name: '新应用',
+      type: 'MICROSERVICE',
+      status: 'BUILDING',
+      owner: '待定',
+      gitRepo: '',
+      tags: []
+    };
+  }
+  if (entityType === 'dependency') {
+    return {
+      source: data.applications[0]?.id || '',
+      target: data.applications[1]?.id || '',
+      type: 'SYNC_API',
+      crit: 'MEDIUM'
+    };
+  }
+  if (entityType === 'dbCluster') {
+    return {
+      id: `db-${Date.now()}`,
+      name: '新数据库集群',
+      type: 'MySQL',
+      mode: '主从',
+      instances: 2,
+      apps: 0,
+      dr: 'none',
+      dc: '新数据中心'
+    };
+  }
   return {
-    id: `app-${Date.now()}`,
-    subsystemId: data.subsystems[0]?.id || '',
-    name: '新应用',
-    type: 'MICROSERVICE',
-    status: 'BUILDING',
-    owner: '待定',
-    gitRepo: '',
-    tags: []
+    id: `mw-${Date.now()}`,
+    name: '新中间件集群',
+    type: 'MQ',
+    product: 'RocketMQ',
+    instances: 2,
+    producers: 0,
+    consumers: 0,
+    health: 'healthy'
   };
 }
 
@@ -367,7 +408,10 @@ function findPanoramaEntity(entityType, id) {
   if (entityType === 'domain') return data.domains.find((x) => x.id === id);
   if (entityType === 'system') return data.systems.find((x) => x.id === id);
   if (entityType === 'subsystem') return data.subsystems.find((x) => x.id === id);
-  return data.applications.find((x) => x.id === id);
+  if (entityType === 'application') return data.applications.find((x) => x.id === id);
+  if (entityType === 'dependency') return data.dependencies.find((x) => String(x.id) === String(id));
+  if (entityType === 'dbCluster') return data.dbClusters.find((x) => x.id === id);
+  return data.mwClusters.find((x) => x.id === id);
 }
 
 async function createPanoramaEntityPrompt(entityType) {
@@ -462,16 +506,61 @@ function renderPanoramaAdminRows(entityType, data) {
       </td>
     </tr>`).join('');
   }
-  return (data.applications || []).map((a) => `<tr>
-    <td><strong>${a.id}</strong></td>
-    <td>${a.name}</td>
-    <td>${a.subsystemName || a.subsystemId || '-'}</td>
-    <td>${a.type || '-'}</td>
-    <td>${a.status || '-'}</td>
-    <td>${a.owner || '-'}</td>
+  if (entityType === 'application') {
+    return (data.applications || []).map((a) => `<tr>
+      <td><strong>${a.id}</strong></td>
+      <td>${a.name}</td>
+      <td>${a.subsystemName || a.subsystemId || '-'}</td>
+      <td>${a.type || '-'}</td>
+      <td>${a.status || '-'}</td>
+      <td>${a.owner || '-'}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-outline" style="padding:4px 8px" onclick="editPanoramaEntityPrompt('application','${a.id}')">编辑</button>
+        <button class="btn btn-outline" style="padding:4px 8px;color:var(--red)" onclick="deletePanoramaEntity('application','${a.id}')">删除</button>
+      </td>
+    </tr>`).join('');
+  }
+  if (entityType === 'dependency') {
+    return (data.dependencies || []).map((d) => `<tr>
+      <td><strong>${d.id}</strong></td>
+      <td>${d.source}</td>
+      <td>${d.target}</td>
+      <td>${d.type || '-'}</td>
+      <td>${d.crit || '-'}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-outline" style="padding:4px 8px" onclick="editPanoramaEntityPrompt('dependency','${d.id}')">编辑</button>
+        <button class="btn btn-outline" style="padding:4px 8px;color:var(--red)" onclick="deletePanoramaEntity('dependency','${d.id}')">删除</button>
+      </td>
+    </tr>`).join('');
+  }
+  if (entityType === 'dbCluster') {
+    return (data.dbClusters || []).map((d) => `<tr>
+      <td><strong>${d.id}</strong></td>
+      <td>${d.name}</td>
+      <td>${d.type || '-'}</td>
+      <td>${d.mode || '-'}</td>
+      <td>${d.instances || 0}</td>
+      <td>${d.apps || 0}</td>
+      <td>${d.dr || '-'}</td>
+      <td>${d.dc || '-'}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-outline" style="padding:4px 8px" onclick="editPanoramaEntityPrompt('dbCluster','${d.id}')">编辑</button>
+        <button class="btn btn-outline" style="padding:4px 8px;color:var(--red)" onclick="deletePanoramaEntity('dbCluster','${d.id}')">删除</button>
+      </td>
+    </tr>`).join('');
+  }
+  return (data.mwClusters || []).map((m) => `<tr>
+    <td><strong>${m.id}</strong></td>
+    <td>${m.name}</td>
+    <td>${m.type || '-'}</td>
+    <td>${m.product || '-'}</td>
+    <td>${m.health || '-'}</td>
+    <td>${m.instances || 0}</td>
+    <td>${m.producers || 0}</td>
+    <td>${m.consumers || 0}</td>
     <td style="white-space:nowrap">
-      <button class="btn btn-outline" style="padding:4px 8px" onclick="editPanoramaEntityPrompt('application','${a.id}')">编辑</button>
-      <button class="btn btn-outline" style="padding:4px 8px;color:var(--red)" onclick="deletePanoramaEntity('application','${a.id}')">删除</button>
+      <button class="btn btn-outline" style="padding:4px 8px" onclick="editPanoramaEntityPrompt('mwCluster','${m.id}')">编辑</button>
+      <button class="btn btn-outline" style="padding:4px 8px;color:var(--red)" onclick="deletePanoramaEntity('mwCluster','${m.id}')">删除</button>
     </td>
   </tr>`).join('');
 }
@@ -499,12 +588,15 @@ function renderPanoramaAdmin(c, b) {
     return;
   }
 
-  const data = state.data || { domains: [], systems: [], subsystems: [], applications: [] };
+  const data = state.data || { domains: [], systems: [], subsystems: [], applications: [], dependencies: [], dbClusters: [], mwClusters: [] };
   const tabs = [
     { key: 'domain', label: `业务域 (${data.domains.length})` },
     { key: 'system', label: `系统 (${data.systems.length})` },
     { key: 'subsystem', label: `子系统 (${data.subsystems.length})` },
-    { key: 'application', label: `应用 (${data.applications.length})` }
+    { key: 'application', label: `应用 (${data.applications.length})` },
+    { key: 'dependency', label: `依赖关系 (${data.dependencies.length})` },
+    { key: 'dbCluster', label: `数据库集群 (${data.dbClusters.length})` },
+    { key: 'mwCluster', label: `中间件集群 (${data.mwClusters.length})` }
   ];
   const tableHeader = panoramaAdminEntity === 'domain'
     ? '<tr><th>ID</th><th>名称</th><th>优先级</th><th>状态</th><th>系统数</th><th>应用数</th><th>操作</th></tr>'
@@ -512,7 +604,13 @@ function renderPanoramaAdmin(c, b) {
       ? '<tr><th>ID</th><th>名称</th><th>所属业务域</th><th>分级</th><th>状态</th><th>子系统数</th><th>应用数</th><th>操作</th></tr>'
       : panoramaAdminEntity === 'subsystem'
         ? '<tr><th>ID</th><th>名称</th><th>所属系统</th><th>状态</th><th>应用数</th><th>操作</th></tr>'
-        : '<tr><th>ID</th><th>名称</th><th>所属子系统</th><th>类型</th><th>状态</th><th>负责人</th><th>操作</th></tr>';
+        : panoramaAdminEntity === 'application'
+          ? '<tr><th>ID</th><th>名称</th><th>所属子系统</th><th>类型</th><th>状态</th><th>负责人</th><th>操作</th></tr>'
+          : panoramaAdminEntity === 'dependency'
+            ? '<tr><th>ID</th><th>源</th><th>目标</th><th>类型</th><th>关键级别</th><th>操作</th></tr>'
+            : panoramaAdminEntity === 'dbCluster'
+              ? '<tr><th>ID</th><th>名称</th><th>类型</th><th>模式</th><th>实例数</th><th>应用数</th><th>灾备</th><th>数据中心</th><th>操作</th></tr>'
+              : '<tr><th>ID</th><th>名称</th><th>类型</th><th>产品</th><th>健康度</th><th>实例数</th><th>生产者</th><th>消费者</th><th>操作</th></tr>';
 
   c.innerHTML = `
     <div class="stats-row fade-in">

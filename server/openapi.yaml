@@ -401,6 +401,59 @@ paths:
       responses:
         '200': { description: Graph payload }
 
+  /api/v1/panorama/dependencies:
+    get:
+      summary: List dependency relations
+      parameters:
+        - in: query
+          name: source
+          schema: { type: string }
+        - in: query
+          name: target
+          schema: { type: string }
+        - in: query
+          name: type
+          schema: { type: string }
+        - in: query
+          name: criticality
+          schema: { type: string }
+      responses:
+        '200': { description: Dependency list }
+    post:
+      summary: Create dependency relation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created dependency }
+
+  /api/v1/panorama/dependencies/{id}:
+    put:
+      summary: Update dependency relation
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated dependency }
+    delete:
+      summary: Delete dependency relation
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200': { description: Delete result }
+
   /api/v1/panorama/applications/{id}/impact:
     get:
       summary: Get impact analysis for application
@@ -462,6 +515,40 @@ paths:
           schema: { type: string, description: Comma-separated field projection paths }
       responses:
         '200': { description: Database clusters }
+    post:
+      summary: Create database cluster
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created database cluster }
+
+  /api/v1/panorama/database-clusters/{id}:
+    put:
+      summary: Update database cluster
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated database cluster }
+    delete:
+      summary: Delete database cluster
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Delete result }
 
   /api/v1/panorama/database-clusters/{id}/detail:
     get:
@@ -492,6 +579,40 @@ paths:
           schema: { type: string, description: Comma-separated field projection paths }
       responses:
         '200': { description: Middleware clusters }
+    post:
+      summary: Create middleware cluster
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created middleware cluster }
+
+  /api/v1/panorama/middleware-clusters/{id}:
+    put:
+      summary: Update middleware cluster
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated middleware cluster }
+    delete:
+      summary: Delete middleware cluster
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Delete result }
 
   /api/v1/panorama/middleware-clusters/{id}/impact:
     get:
