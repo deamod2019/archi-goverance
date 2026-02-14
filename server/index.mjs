@@ -12,6 +12,7 @@ const SEED_FILE = process.env.SEED_FILE || path.resolve(STATIC_DIR, 'data.seed.j
 const SEED_FORCE = process.env.SEED_FORCE === 'true';
 
 const DATABASE_URL = process.env.DATABASE_URL;
+const IS_RENDER = !!process.env.RENDER;
 const pool = new Pool(
   DATABASE_URL
     ? { connectionString: DATABASE_URL, ssl: process.env.PGSSLMODE === 'disable' ? false : { rejectUnauthorized: false } }
@@ -23,6 +24,9 @@ const pool = new Pool(
         database: process.env.PGDATABASE || 'aichi_governance'
       }
 );
+
+const STARTUP_DB_RETRIES = Number.parseInt(process.env.STARTUP_DB_RETRIES || '30', 10);
+const STARTUP_DB_RETRY_MS = Number.parseInt(process.env.STARTUP_DB_RETRY_MS || '2000', 10);
 
 const REQUIRED_SECTIONS = ['MOCK', 'PERSONS', 'TEAMS', 'ARCH_STANDARDS', 'RULE_STD_MAP'];
 
@@ -679,8 +683,29 @@ const server = http.createServer(async (req, res) => {
 });
 
 async function start() {
-  await initSchema();
-  await ensureSeedData();
+  if (IS_RENDER && !DATABASE_URL) {
+    throw new Error('DATABASE_URL is not set. On Render, bind a Postgres database and expose connectionString to DATABASE_URL.');
+  }
+
+  let lastError = null;
+  for (let attempt = 1; attempt <= STARTUP_DB_RETRIES; attempt += 1) {
+    try {
+      await initSchema();
+      await ensureSeedData();
+      lastError = null;
+      break;
+    } catch (error) {
+      lastError = error;
+      console.error(`[startup] database init failed (attempt ${attempt}/${STARTUP_DB_RETRIES}): ${error.message}`);
+      if (attempt < STARTUP_DB_RETRIES) {
+        await new Promise((resolve) => setTimeout(resolve, STARTUP_DB_RETRY_MS));
+      }
+    }
+  }
+
+  if (lastError) {
+    throw lastError;
+  }
 
   server.listen(PORT, HOST, () => {
     console.log(`aichi-governance server listening on ${HOST}:${PORT}`);
