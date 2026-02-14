@@ -372,6 +372,31 @@ paths:
           schema: { type: string, description: Comma-separated field projection paths }
       responses:
         '200': { description: Compliance rule list }
+    post:
+      summary: Create compliance rule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Compliance rule created }
+
+  /api/v1/compliance-rules/{id}:
+    put:
+      summary: Update compliance rule
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Compliance rule updated }
 
   /api/v1/standards:
     get:

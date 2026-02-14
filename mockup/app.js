@@ -1427,6 +1427,59 @@ function renderReviewResult(el) {
 }
 
 // ========== Dashboard ==========
+function reviewStatusMeta(status) {
+  if (status === 'REVIEWING') return { cls: 'status-reviewing', text: '评审中' };
+  if (status === 'APPROVED') return { cls: 'status-approved', text: '已通过' };
+  if (status === 'REJECTED') return { cls: 'status-rejected', text: '已驳回' };
+  return { cls: 'status-draft', text: '草稿' };
+}
+
+async function showReviewDetailById(reviewId) {
+  closePopup();
+  const overlay = document.createElement('div'); overlay.className = 'popup-overlay'; overlay.onclick = closePopup;
+  const popup = document.createElement('div'); popup.className = 'popup-panel fade-in';
+  popup.style.maxWidth = '880px';
+  popup.style.width = '92vw';
+  popup.innerHTML = `<div class="popup-close" onclick="closePopup()">✕</div>
+    <div class="popup-header"><span class="popup-avatar">📋</span><div><div class="popup-name">评审详情</div><div class="popup-subtitle">${reviewId}</div></div></div>
+    <div class="popup-body">加载中...</div>`;
+  document.body.appendChild(overlay);
+  document.body.appendChild(popup);
+  try {
+    const detail = await apiRequest(`/api/v1/reviews/${encodeURIComponent(reviewId)}?include_checks=true`);
+    const st = reviewStatusMeta(detail.status);
+    const checks = Array.isArray(detail.checks) ? detail.checks : [];
+    const summary = {
+      total: checks.length,
+      passed: checks.filter((x) => x.passed).length,
+      failed: checks.filter((x) => !x.passed).length
+    };
+    const checksHtml = checks.length
+      ? `<table class="review-table" style="margin-top:10px"><thead><tr><th>规则</th><th>级别</th><th>结果</th><th>说明</th></tr></thead><tbody>${
+        checks.map((x) => `<tr><td>${x.ruleId}</td><td>${x.severity}</td><td>${x.passed ? '✅ 通过' : '❌ 未通过'}</td><td>${x.message || ''}</td></tr>`).join('')
+      }</tbody></table>`
+      : '<div style="color:var(--text2)">暂无检查记录</div>';
+    const canResubmit = detail.status === 'REJECTED' || detail.status === 'DRAFT';
+    popup.querySelector('.popup-body').innerHTML = `
+      <div class="popup-row"><span class="lbl">标题</span><span><strong>${detail.title || ''}</strong></span></div>
+      <div class="popup-row"><span class="lbl">类型</span><span>${detail.type || ''}</span></div>
+      <div class="popup-row"><span class="lbl">系统</span><span>${detail.system || '—'}</span></div>
+      <div class="popup-row"><span class="lbl">申请人</span><span>${detail.applicant || '—'}</span></div>
+      <div class="popup-row"><span class="lbl">日期</span><span>${detail.date || '—'}</span></div>
+      <div class="popup-row"><span class="lbl">状态</span><span class="status-tag ${st.cls}">${st.text}</span></div>
+      <div class="popup-row"><span class="lbl">检查汇总</span><span>${summary.passed}/${summary.total} 通过，${summary.failed} 未通过</span></div>
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-outline" onclick="rerunReviewChecksById('${detail.id}')">重跑检查</button>
+        ${canResubmit ? `<button class="btn btn-primary" onclick="resubmitReviewById('${detail.id}')">重新提交</button>` : ''}
+      </div>
+      <h3 style="margin:18px 0 8px;font-size:14px">检查明细</h3>
+      ${checksHtml}
+    `;
+  } catch (error) {
+    popup.querySelector('.popup-body').innerHTML = `<div style="color:var(--red)">加载失败：${error.message}</div>`;
+  }
+}
+
 async function rerunReviewChecksById(reviewId) {
   try {
     const result = await apiRequest(`/api/v1/reviews/${encodeURIComponent(reviewId)}/compliance-check/run`, { method: 'POST' });
@@ -1454,9 +1507,9 @@ function renderDashboard(c, b) {
   c.innerHTML = '<div class="card fade-in"><div class="card-title">加载中</div><div class="card-desc">正在获取评审数据...</div></div>';
 
   apiRequest('/api/v1/reviews')
-    .then((reviews) => {
-      MOCK.reviews = reviews;
-      const approved = reviews.filter(r => r.status === 'APPROVED').length;
+	    .then((reviews) => {
+	      MOCK.reviews = reviews;
+	      const approved = reviews.filter(r => r.status === 'APPROVED').length;
       const reviewing = reviews.filter(r => r.status === 'REVIEWING').length;
       const rejected = reviews.filter(r => r.status === 'REJECTED').length;
       const passRate = approved + rejected > 0 ? Math.round(approved / (approved + rejected) * 100) : 0;
@@ -1469,13 +1522,13 @@ function renderDashboard(c, b) {
 	      <h3 style="font-size:15px;margin-bottom:12px" class="fade-in">评审列表</h3>
 	      <table class="review-table fade-in"><thead><tr><th>编号</th><th>标题</th><th>类型</th><th>系统</th><th>等级</th><th>申请人</th><th>日期</th><th>状态</th><th>操作</th></tr></thead><tbody>`;
 	      reviews.forEach(r => {
-	        const stCls = r.status === 'REVIEWING' ? 'status-reviewing' : r.status === 'APPROVED' ? 'status-approved' : r.status === 'REJECTED' ? 'status-rejected' : 'status-draft';
-	        const stText = r.status === 'REVIEWING' ? '评审中' : r.status === 'APPROVED' ? '已通过' : r.status === 'REJECTED' ? '已驳回' : '草稿';
+          const st = reviewStatusMeta(r.status);
 	        const lvlTag = r.level === 'CORE' ? 'tag-core' : r.level === 'IMPORTANT' ? 'tag-important' : 'tag-general';
           const canResubmit = r.status === 'REJECTED' || r.status === 'DRAFT';
-          let actions = `<button class="btn btn-outline" style="padding:4px 8px" onclick="event.stopPropagation();rerunReviewChecksById('${r.id}')">重跑检查</button>`;
+          let actions = `<button class="btn btn-outline" style="padding:4px 8px" onclick="event.stopPropagation();showReviewDetailById('${r.id}')">详情</button>`;
+          actions += ` <button class="btn btn-outline" style="padding:4px 8px" onclick="event.stopPropagation();rerunReviewChecksById('${r.id}')">重跑检查</button>`;
           if (canResubmit) actions += ` <button class="btn btn-primary" style="padding:4px 8px" onclick="event.stopPropagation();resubmitReviewById('${r.id}')">重新提交</button>`;
-	        html += `<tr><td>${r.id}</td><td><strong>${r.title}</strong></td><td>${r.type}</td><td>${r.system || ''}</td><td><span class="tag ${lvlTag}">${r.level || 'GENERAL'}</span></td><td>${r.applicant || ''}</td><td>${r.date}</td><td><span class="status-tag ${stCls}">${stText}</span></td><td style="white-space:nowrap">${actions}</td></tr>`;
+	        html += `<tr><td>${r.id}</td><td><strong>${r.title}</strong></td><td>${r.type}</td><td>${r.system || ''}</td><td><span class="tag ${lvlTag}">${r.level || 'GENERAL'}</span></td><td>${r.applicant || ''}</td><td>${r.date}</td><td><span class="status-tag ${st.cls}">${st.text}</span></td><td style="white-space:nowrap">${actions}</td></tr>`;
 	      });
 	      c.innerHTML = html + '</tbody></table>';
 	    })

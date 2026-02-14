@@ -1352,6 +1352,24 @@ function normalizeRuleInput(raw, fallbackId) {
   };
 }
 
+function normalizeComplianceRuleInput(raw, fallbackId) {
+  const normalized = normalizeRuleInput(
+    {
+      id: raw?.ruleId || raw?.id || fallbackId,
+      name: raw?.name,
+      level: raw?.level || raw?.severity,
+      checkMethod: raw?.checkMethod,
+      description: raw?.description || raw?.message,
+      checkScript: raw?.checkScript
+    },
+    fallbackId
+  );
+  return {
+    ruleId: normalized.id,
+    payload: normalized
+  };
+}
+
 function normalizeStandardInput(raw, fallbackId) {
   const standardId = String(raw?.id || fallbackId || '').trim();
   const name = String(raw?.name || '').trim();
@@ -3167,6 +3185,39 @@ async function handleApi(req, res, url) {
     const { rows } = await pool.query('SELECT rule_id, payload FROM compliance_rules ORDER BY rule_id');
     const data = rows.map((r) => ({ ruleId: r.rule_id, ...r.payload }));
     sendJson(res, 200, projectData(data, fields));
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/compliance-rules') {
+    const body = await readJsonBody(req);
+    const normalized = normalizeComplianceRuleInput(body);
+    const exists = await pool.query('SELECT 1 FROM compliance_rules WHERE rule_id = $1', [normalized.ruleId]);
+    if (exists.rows.length) {
+      throw new HttpError(409, `compliance rule '${normalized.ruleId}' already exists`);
+    }
+    await pool.query(
+      'INSERT INTO compliance_rules (rule_id, payload, updated_at) VALUES ($1, $2::jsonb, now())',
+      [normalized.ruleId, JSON.stringify(normalized.payload)]
+    );
+    sendJson(res, 201, { ruleId: normalized.ruleId, ...normalized.payload });
+    return true;
+  }
+
+  const complianceRuleItemMatch = url.pathname.match(/^\/api\/v1\/compliance-rules\/([^/]+)$/);
+  if (req.method === 'PUT' && complianceRuleItemMatch) {
+    const ruleId = decodeURIComponent(complianceRuleItemMatch[1]);
+    const current = await pool.query('SELECT payload FROM compliance_rules WHERE rule_id = $1', [ruleId]);
+    if (!current.rows.length) {
+      throw new HttpError(404, 'compliance rule not found');
+    }
+    const body = await readJsonBody(req);
+    const merged = { ...(current.rows[0].payload || {}), ...(body || {}), id: ruleId, ruleId };
+    const normalized = normalizeComplianceRuleInput(merged, ruleId);
+    await pool.query(
+      'UPDATE compliance_rules SET payload = $2::jsonb, updated_at = now() WHERE rule_id = $1',
+      [ruleId, JSON.stringify(normalized.payload)]
+    );
+    sendJson(res, 200, { ruleId, ...normalized.payload });
     return true;
   }
 
