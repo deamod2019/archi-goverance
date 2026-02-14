@@ -1,0 +1,22 @@
+# Render Blueprint - Infrastructure as Code
+# 文档: https://docs.render.com/blueprint-spec
+#
+# 使用方式:
+#   1. 将此文件推送到 GitHub 仓库
+#   2. 在 Render Dashboard 中点击 "New" → "Blueprint"
+#   3. 选择 GitHub 仓库，Render 自动读取此文件创建服务
+
+services:
+  # ---- Web 容器服务 (Docker) ----
+  - type: web
+    name: aichi-governance
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    region: singapore           # 离中国最近的 Render 节点
+    plan: free                  # 免费计划, 可改为 starter ($7/月)
+    branch: main                # 部署分支, 按需改为 master
+    autoDeploy: true            # git push 自动部署
+    healthCheckPath: /health
+    envVars:
+      - key: TZ
+        value: Asia/Shanghai

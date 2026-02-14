@@ -1,0 +1,15 @@
+.git
+.gitignore
+.DS_Store
+*.md
+docs/
+er_diagram.mmd
+er_diagram.png
+er_diagram_hd.png
+er_diagram_screenshot.png
+er_diagram.html
+.idea/
+.vscode/
+.agent/
+.gemini/
+node_modules/
