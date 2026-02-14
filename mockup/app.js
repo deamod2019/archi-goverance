@@ -6,6 +6,7 @@ let panoramaAdminEntity = 'domain';
 let panoramaAdminFormState = { open: false, mode: 'create', entityType: null, entityId: null, values: {} };
 const VIEW_CACHE = {};
 const PANORAMA_STRUCTURED_ENTITY_TYPES = new Set(['domain', 'system', 'subsystem', 'application']);
+const V1_TREEMAP_STATE = { metric: 'apps', health: 'all', keyword: '' };
 
 // === Linked navigation helpers ===
 function personLink(name) {
@@ -47,6 +48,127 @@ function getDomainColor(domainIdOrName) {
   let hash = 0;
   for (let i = 0; i < key.length; i++) hash = ((hash << 5) - hash + key.charCodeAt(i)) | 0;
   return palette[Math.abs(hash) % palette.length];
+}
+
+function hexToRgba(hex, alpha) {
+  const raw = String(hex || '').trim().replace('#', '');
+  let normalized = raw;
+  if (raw.length === 3) normalized = raw.split('').map((x) => x + x).join('');
+  if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return `rgba(99, 102, 241, ${alpha})`;
+  const r = Number.parseInt(normalized.slice(0, 2), 16);
+  const g = Number.parseInt(normalized.slice(2, 4), 16);
+  const b = Number.parseInt(normalized.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function escapeJsSingleQuoted(value) {
+  return String(value == null ? '' : value)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'");
+}
+
+function normalizeTreemapWeight(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function treemapWorstAspect(row, shortSide) {
+  if (!row.length || shortSide <= 0) return Number.POSITIVE_INFINITY;
+  let sum = 0;
+  let min = Number.POSITIVE_INFINITY;
+  let max = 0;
+  row.forEach((entry) => {
+    const area = Math.max(entry.area, 1e-6);
+    sum += area;
+    min = Math.min(min, area);
+    max = Math.max(max, area);
+  });
+  const side2 = shortSide * shortSide;
+  const sum2 = sum * sum;
+  return Math.max((side2 * max) / sum2, sum2 / (side2 * min));
+}
+
+function layoutTreemapRow(row, box, output) {
+  if (!row.length || box.w <= 0 || box.h <= 0) return;
+  const sumArea = row.reduce((acc, entry) => acc + entry.area, 0);
+  if (box.w >= box.h) {
+    const rowH = sumArea / box.w;
+    let cursorX = box.x;
+    row.forEach((entry, idx) => {
+      const width = idx === row.length - 1 ? Math.max(0, box.x + box.w - cursorX) : Math.max(0, entry.area / rowH);
+      output.push({ item: entry.item, x: cursorX, y: box.y, w: width, h: rowH });
+      cursorX += width;
+    });
+    box.y += rowH;
+    box.h = Math.max(0, box.h - rowH);
+  } else {
+    const colW = sumArea / box.h;
+    let cursorY = box.y;
+    row.forEach((entry, idx) => {
+      const height = idx === row.length - 1 ? Math.max(0, box.y + box.h - cursorY) : Math.max(0, entry.area / colW);
+      output.push({ item: entry.item, x: box.x, y: cursorY, w: colW, h: height });
+      cursorY += height;
+    });
+    box.x += colW;
+    box.w = Math.max(0, box.w - colW);
+  }
+}
+
+function buildTreemapLayout(items, x, y, w, h) {
+  if (!Array.isArray(items) || !items.length || w <= 0 || h <= 0) return [];
+
+  const normalized = items.map((item) => ({ ...item, weight: normalizeTreemapWeight(item.weight) }));
+  let total = normalized.reduce((sum, item) => sum + item.weight, 0);
+  if (total <= 0) {
+    normalized.forEach((item) => { item.weight = 1; });
+    total = normalized.length;
+  }
+
+  const containerArea = w * h;
+  const queue = normalized
+    .map((entry) => ({ item: entry, area: (entry.weight / total) * containerArea }))
+    .sort((a, b) => b.area - a.area);
+  const output = [];
+  const box = { x, y, w, h };
+  let row = [];
+
+  while (queue.length) {
+    const candidate = queue[0];
+    if (!row.length) {
+      row.push(candidate);
+      queue.shift();
+      continue;
+    }
+    const shortSide = Math.min(box.w, box.h);
+    const currentWorst = treemapWorstAspect(row, shortSide);
+    const nextWorst = treemapWorstAspect([...row, candidate], shortSide);
+    if (nextWorst <= currentWorst) {
+      row.push(candidate);
+      queue.shift();
+      continue;
+    }
+    layoutTreemapRow(row, box, output);
+    row = [];
+  }
+
+  if (row.length) layoutTreemapRow(row, box, output);
+  return output;
+}
+
+function setV1TreemapMetric(metric) {
+  V1_TREEMAP_STATE.metric = metric === 'systems' ? 'systems' : 'apps';
+  if (currentView === 'v1' && v1Level === 0) render();
+}
+
+function setV1TreemapHealth(health) {
+  const allowed = new Set(['all', 'good', 'warn', 'bad']);
+  V1_TREEMAP_STATE.health = allowed.has(health) ? health : 'all';
+  if (currentView === 'v1' && v1Level === 0) render();
+}
+
+function setV1TreemapKeyword(keyword) {
+  V1_TREEMAP_STATE.keyword = String(keyword || '');
+  if (currentView === 'v1' && v1Level === 0) render();
 }
 function getStandardsCatalog() {
   const state = VIEW_CACHE.standardsCatalog;
@@ -1831,35 +1953,93 @@ function renderV1Treemap(c, b) {
     renderLoadError(c, state.error);
     return;
   }
-  MOCK.domains = state.data;
+  const domains = Array.isArray(state.data) ? state.data : [];
+  MOCK.domains = domains;
 
-  const total = MOCK.domains.reduce((s, d) => s + d.apps, 0);
-  const totalSys = MOCK.domains.reduce((s, d) => s + Number(d.systems || 0), 0);
+  const total = domains.reduce((s, d) => s + Number(d.apps || 0), 0);
+  const totalSys = domains.reduce((s, d) => s + Number(d.systems || 0), 0);
+  const avgCompliance = domains.length
+    ? Math.round(domains.reduce((s, d) => s + Number(d.compliance || 0), 0) / domains.length)
+    : 0;
+  const alertCount = domains.filter((d) => String(d.health || '').toLowerCase() === 'warn').length;
+
   const stats = `<div class="stats-row fade-in">
-    <div class="stat-card"><div class="label">业务域</div><div class="value">${MOCK.domains.length}</div></div>
+    <div class="stat-card"><div class="label">业务域</div><div class="value">${domains.length}</div></div>
     <div class="stat-card"><div class="label">系统总数</div><div class="value" style="color:var(--cyan)">${totalSys}</div></div>
     <div class="stat-card"><div class="label">应用总数</div><div class="value" style="color:var(--accent2)">${total}</div></div>
-    <div class="stat-card"><div class="label">平均合规率</div><div class="value" style="color:var(--green)">${Math.round(MOCK.domains.reduce((s, d) => s + d.compliance, 0) / MOCK.domains.length)}%</div></div>
-    <div class="stat-card"><div class="label">告警域</div><div class="value" style="color:var(--yellow)">${MOCK.domains.filter(d => d.health === 'warn').length}</div></div>
+    <div class="stat-card"><div class="label">平均合规率</div><div class="value" style="color:var(--green)">${avgCompliance}%</div></div>
+    <div class="stat-card"><div class="label">告警域</div><div class="value" style="color:var(--yellow)">${alertCount}</div></div>
   </div>`;
-  // Simple treemap layout
-  const sorted = [...MOCK.domains].sort((a, b) => b.apps - a.apps);
-  let cells = '';
-  const positions = [
-    { x: 0, y: 0, w: 40, h: 55 }, { x: 40, y: 0, w: 30, h: 55 }, { x: 70, y: 0, w: 30, h: 35 },
-    { x: 0, y: 55, w: 25, h: 45 }, { x: 25, y: 55, w: 45, h: 45 }, { x: 70, y: 35, w: 30, h: 30 }, { x: 70, y: 65, w: 30, h: 35 }
-  ];
-  sorted.forEach((d, i) => {
-    if (i >= positions.length) return;
-    const p = positions[i];
-    const sysCnt = Number(d.systems || 0);
-    const opacity = d.health === 'warn' ? 0.7 : 0.85;
-    cells += `<div class="treemap-cell" style="left:${p.x}%;top:${p.y}%;width:${p.w}%;height:${p.h}%;background:${d.color}${Math.round(opacity * 255).toString(16)}" onclick="drillDomain('${d.id}')">
-      <div class="cell-name">${d.name}</div>
-      <div class="cell-count">${d.apps}个应用 · ${sysCnt}个系统 · 合规${d.compliance}%</div>
-    </div>`;
+
+  const controls = `<div class="treemap-toolbar fade-in">
+    <label class="treemap-control">
+      <span>面积指标</span>
+      <select onchange="setV1TreemapMetric(this.value)">
+        <option value="apps" ${V1_TREEMAP_STATE.metric === 'apps' ? 'selected' : ''}>应用数</option>
+        <option value="systems" ${V1_TREEMAP_STATE.metric === 'systems' ? 'selected' : ''}>系统数</option>
+      </select>
+    </label>
+    <label class="treemap-control">
+      <span>健康筛选</span>
+      <select onchange="setV1TreemapHealth(this.value)">
+        <option value="all" ${V1_TREEMAP_STATE.health === 'all' ? 'selected' : ''}>全部</option>
+        <option value="good" ${V1_TREEMAP_STATE.health === 'good' ? 'selected' : ''}>good</option>
+        <option value="warn" ${V1_TREEMAP_STATE.health === 'warn' ? 'selected' : ''}>warn</option>
+        <option value="bad" ${V1_TREEMAP_STATE.health === 'bad' ? 'selected' : ''}>bad</option>
+      </select>
+    </label>
+    <label class="treemap-control treemap-control-search">
+      <span>搜索业务域</span>
+      <input value="${escapeHtml(V1_TREEMAP_STATE.keyword)}" placeholder="输入名称 / ID / 编码" oninput="setV1TreemapKeyword(this.value)">
+    </label>
+  </div>`;
+
+  const keyword = String(V1_TREEMAP_STATE.keyword || '').trim().toLowerCase();
+  const filtered = domains.filter((d) => {
+    const health = String(d.health || '').toLowerCase();
+    if (V1_TREEMAP_STATE.health !== 'all' && health !== V1_TREEMAP_STATE.health) return false;
+    if (!keyword) return true;
+    return `${String(d.name || '').toLowerCase()} ${String(d.id || '').toLowerCase()} ${String(d.code || '').toLowerCase()}`.includes(keyword);
   });
-  c.innerHTML = stats + `<div class="treemap-container fade-in">${cells}</div>`;
+
+  if (!filtered.length) {
+    c.innerHTML = `${stats}${controls}<div class="card treemap-empty fade-in"><div class="card-title">无匹配业务域</div><div class="card-desc">请调整筛选条件或搜索关键词。</div></div>`;
+    return;
+  }
+
+  const weightField = V1_TREEMAP_STATE.metric === 'systems' ? 'systems' : 'apps';
+  const weighted = filtered
+    .map((domain) => ({ domain, weight: normalizeTreemapWeight(domain[weightField]) }))
+    .sort((a, b) => b.weight - a.weight || String(a.domain.name || '').localeCompare(String(b.domain.name || '')));
+  const rects = buildTreemapLayout(weighted, 0, 0, 100, 100);
+
+  const cells = rects.map((rect) => {
+    const d = rect.item.domain;
+    const apps = Number(d.apps || 0);
+    const systems = Number(d.systems || 0);
+    const metricValue = weightField === 'apps' ? apps : systems;
+    const area = rect.w * rect.h;
+    const tiny = area < 320;
+    const showMeta = area >= 430;
+    const nameSize = area >= 1600 ? 20 : area >= 900 ? 16 : area >= 520 ? 14 : 12;
+    const color = getDomainColor(d.id || d.name);
+    const bg1 = hexToRgba(color, String(d.health || '').toLowerCase() === 'warn' ? 0.68 : 0.78);
+    const bg2 = hexToRgba(color, String(d.health || '').toLowerCase() === 'warn' ? 0.36 : 0.52);
+    const border = hexToRgba(color, 0.9);
+    const title = `${d.name || d.id}\n应用: ${apps}\n系统: ${systems}\n合规率: ${Number(d.compliance || 0)}%\n负责人: ${d.owner || '-'}`;
+    const inset = 0.55;
+    const left = rect.x + inset / 2;
+    const top = rect.y + inset / 2;
+    const width = Math.max(0.8, rect.w - inset);
+    const height = Math.max(0.8, rect.h - inset);
+    return `<div class="treemap-cell ${tiny ? 'treemap-cell-tiny' : ''}" title="${escapeHtml(title)}" style="left:${left}%;top:${top}%;width:${width}%;height:${height}%;background:linear-gradient(152deg, ${bg1}, ${bg2});border-color:${border}" onclick="drillDomain('${escapeJsSingleQuoted(d.id)}')">
+      <div class="cell-name" style="font-size:${nameSize}px">${escapeHtml(d.name || d.id)}</div>
+      ${showMeta ? `<div class="cell-count">${apps}个应用 · ${systems}个系统 · 合规${Number(d.compliance || 0)}%</div>` : ''}
+      <div class="cell-mini">${weightField === 'apps' ? '应用' : '系统'}: ${metricValue}</div>
+    </div>`;
+  }).join('');
+
+  c.innerHTML = `${stats}${controls}<div class="treemap-container fade-in">${cells}</div>`;
 }
 
 async function drillDomain(domainId) {

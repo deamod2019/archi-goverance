@@ -225,38 +225,111 @@ body {
     aspect-ratio: 16/9;
     position: relative;
     border-radius: 12px;
-    overflow: hidden
+    overflow: hidden;
+    border: 1px solid var(--border);
+    background:
+        radial-gradient(circle at 10% 10%, rgba(99, 102, 241, .12), transparent 42%),
+        radial-gradient(circle at 90% 90%, rgba(6, 182, 212, .1), transparent 44%),
+        linear-gradient(180deg, rgba(26, 32, 53, .94), rgba(17, 24, 39, .94))
+}
+
+.treemap-toolbar {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: -8px;
+    margin-bottom: 12px
+}
+
+.treemap-control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 12px;
+    color: var(--text2)
+}
+
+.treemap-control select,
+.treemap-control input {
+    background: var(--bg4);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 5px 8px;
+    font-size: 12px;
+    min-width: 88px;
+    outline: none
+}
+
+.treemap-control select:focus,
+.treemap-control input:focus {
+    border-color: var(--accent)
+}
+
+.treemap-control-search input {
+    min-width: 200px
+}
+
+.treemap-empty {
+    margin-top: 12px
 }
 
 .treemap-cell {
     position: absolute;
-    border: 2px solid var(--bg);
-    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, .25);
+    border-radius: 10px;
     cursor: pointer;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    transition: all .3s;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 10px 11px 9px;
+    gap: 4px;
+    transition: transform .2s ease, filter .2s ease, box-shadow .2s ease;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08), 0 4px 10px rgba(0, 0, 0, .18);
     overflow: hidden
 }
 
 .treemap-cell:hover {
-    filter: brightness(1.2);
-    transform: scale(1.02);
+    filter: brightness(1.08);
+    transform: translateY(-1px);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .16), 0 10px 24px rgba(0, 0, 0, .28);
     z-index: 2
 }
 
 .treemap-cell .cell-name {
     font-size: 16px;
     font-weight: 700;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, .5)
+    text-shadow: 0 1px 3px rgba(0, 0, 0, .5);
+    line-height: 1.15
 }
 
 .treemap-cell .cell-count {
     font-size: 12px;
-    opacity: .8;
-    margin-top: 4px
+    opacity: .9;
+    line-height: 1.3
+}
+
+.treemap-cell .cell-mini {
+    font-size: 11px;
+    opacity: .82;
+    font-weight: 600
+}
+
+.treemap-cell.treemap-cell-tiny {
+    padding: 8px 8px 6px
+}
+
+.treemap-cell.treemap-cell-tiny .cell-name {
+    font-size: 12px
+}
+
+.treemap-cell.treemap-cell-tiny .cell-mini {
+    font-size: 10px
 }
 
 /* Cards grid */
@@ -1062,6 +1135,21 @@ body {
 
     .content {
         padding: 12px
+    }
+
+    .treemap-toolbar {
+        flex-direction: column;
+        gap: 8px
+    }
+
+    .treemap-control {
+        width: 100%;
+        justify-content: space-between
+    }
+
+    .treemap-control-search input {
+        min-width: 0;
+        width: 55%
     }
 
     .panorama-form-head {
