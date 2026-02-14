@@ -3,7 +3,9 @@ let currentView = 'v1';
 let v1Level = 0; // 0=treemap, 1=domain, 2=system, 3=subsystem, 4=profile
 let v1Domain = null, v1System = null, v1Subsystem = null, v1App = null;
 let panoramaAdminEntity = 'domain';
+let panoramaAdminFormState = { open: false, mode: 'create', entityType: null, entityId: null, values: {} };
 const VIEW_CACHE = {};
+const PANORAMA_STRUCTURED_ENTITY_TYPES = new Set(['domain', 'system', 'subsystem', 'application']);
 
 // === Linked navigation helpers ===
 function personLink(name) {
@@ -392,6 +394,463 @@ function promptJsonInput(title, initialObj) {
   }
 }
 
+function isStructuredPanoramaEntity(entityType) {
+  return PANORAMA_STRUCTURED_ENTITY_TYPES.has(entityType);
+}
+
+function resetPanoramaAdminFormState() {
+  panoramaAdminFormState = { open: false, mode: 'create', entityType: null, entityId: null, values: {} };
+}
+
+function setPanoramaAdminEntity(entityType) {
+  panoramaAdminEntity = entityType;
+  if (panoramaAdminFormState.open && panoramaAdminFormState.entityType !== entityType) {
+    resetPanoramaAdminFormState();
+  }
+  render();
+}
+
+function escapeHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function tagsToText(tags) {
+  if (Array.isArray(tags)) return tags.join(', ');
+  if (typeof tags === 'string') return tags;
+  return '';
+}
+
+function mapPanoramaEntityToFormValues(entityType, source, data) {
+  const base = source || {};
+  if (entityType === 'domain') {
+    return {
+      id: base.id || '',
+      name: base.name || '',
+      code: base.code || '',
+      owner: base.owner || '',
+      architect: base.architect || '',
+      status: base.status || 'ACTIVE',
+      priority: base.priority || 'P1',
+      health: base.health || 'good',
+      createdDate: base.createdDate || new Date().toISOString().slice(0, 10),
+      lastReviewDate: base.lastReviewDate || new Date().toISOString().slice(0, 10),
+      compliance: base.compliance == null ? 0 : base.compliance,
+      color: base.color || '#6366f1',
+      description: base.description || '',
+      bizGoal: base.bizGoal || ''
+    };
+  }
+  if (entityType === 'system') {
+    return {
+      id: base.id || '',
+      domainId: base.domainId || data.domains[0]?.id || '',
+      name: base.name || '',
+      code: base.code || '',
+      level: base.level || 'GENERAL',
+      status: base.status || 'RUNNING',
+      owner: base.owner || '',
+      architect: base.architect || '',
+      team: base.team || '',
+      teamSize: base.teamSize == null ? 0 : base.teamSize,
+      techStack: base.techStack || '',
+      createdDate: base.createdDate || new Date().toISOString().slice(0, 10),
+      lastDeployDate: base.lastDeployDate || new Date().toISOString().slice(0, 10),
+      deployMode: base.deployMode || '',
+      dataCenters: base.dataCenters || '',
+      tags: tagsToText(base.tags),
+      classification: base.classification || '',
+      securityLevel: base.securityLevel || '',
+      dataLevel: base.dataLevel || '',
+      description: base.description || ''
+    };
+  }
+  if (entityType === 'subsystem') {
+    return {
+      id: base.id || '',
+      systemId: base.systemId || data.systems[0]?.id || '',
+      name: base.name || '',
+      code: base.code || '',
+      status: base.status || 'RUNNING',
+      owner: base.owner || '',
+      team: base.team || '',
+      techStack: base.techStack || '',
+      createdDate: base.createdDate || new Date().toISOString().slice(0, 10),
+      tags: tagsToText(base.tags),
+      classification: base.classification || '',
+      securityLevel: base.securityLevel || '',
+      dataLevel: base.dataLevel || '',
+      description: base.description || ''
+    };
+  }
+  return {
+    id: base.id || '',
+    subsystemId: base.subsystemId || data.subsystems[0]?.id || '',
+    name: base.name || '',
+    type: base.type || 'MICROSERVICE',
+    status: base.status || 'RUNNING',
+    owner: base.owner || '',
+    gitRepo: base.gitRepo || '',
+    tags: tagsToText(base.tags),
+    classification: base.classification || '',
+    securityLevel: base.securityLevel || '',
+    dataLevel: base.dataLevel || ''
+  };
+}
+
+function openPanoramaEntityForm(entityType, mode, entityId) {
+  if (!isStructuredPanoramaEntity(entityType)) return;
+  const data = getPanoramaAdminData();
+  const source = mode === 'edit'
+    ? findPanoramaEntity(entityType, entityId)
+    : defaultPanoramaEntityTemplate(entityType);
+  if (!source) {
+    alert(`${PANORAMA_ENTITY_META[entityType]?.label || '实体'}不存在`);
+    return;
+  }
+  panoramaAdminFormState = {
+    open: true,
+    mode,
+    entityType,
+    entityId: mode === 'edit' ? String(entityId || source.id || '') : null,
+    values: mapPanoramaEntityToFormValues(entityType, source, data)
+  };
+  render();
+}
+
+function closePanoramaEntityForm() {
+  if (!panoramaAdminFormState.open) return;
+  resetPanoramaAdminFormState();
+  render();
+}
+
+function updatePanoramaEntityFormField(field, value) {
+  if (!panoramaAdminFormState.open) return;
+  panoramaAdminFormState.values = {
+    ...(panoramaAdminFormState.values || {}),
+    [field]: value
+  };
+}
+
+function renderPanoramaSelectOptions(options, selected) {
+  return options.map((opt) => {
+    const value = String(opt.value);
+    const isSelected = String(selected == null ? '' : selected) === value ? ' selected' : '';
+    return `<option value="${escapeHtml(value)}"${isSelected}>${escapeHtml(opt.label)}</option>`;
+  }).join('');
+}
+
+function renderPanoramaField(field) {
+  const values = panoramaAdminFormState.values || {};
+  const value = values[field.key] == null ? '' : values[field.key];
+  const idLocked = panoramaAdminFormState.mode === 'edit' && field.key === 'id';
+  const requiredMark = field.required ? '<span style="color:var(--red)"> *</span>' : '';
+  const placeholder = field.placeholder ? ` placeholder="${escapeHtml(field.placeholder)}"` : '';
+  const helpText = idLocked ? '编辑模式下ID不可修改。' : field.help;
+  const help = helpText ? `<div class="panorama-form-help">${escapeHtml(helpText)}</div>` : '';
+
+  if (field.type === 'textarea') {
+    return `<label class="panorama-form-item">
+      <span class="panorama-form-label">${field.label}${requiredMark}</span>
+      <textarea rows="${field.rows || 3}" oninput="updatePanoramaEntityFormField('${field.key}', this.value)"${placeholder}>${escapeHtml(value)}</textarea>
+      ${help}
+    </label>`;
+  }
+
+  if (field.type === 'select') {
+    const options = [{ value: '', label: field.emptyLabel || '请选择' }, ...(field.options || [])];
+    return `<label class="panorama-form-item">
+      <span class="panorama-form-label">${field.label}${requiredMark}</span>
+      <select onchange="updatePanoramaEntityFormField('${field.key}', this.value)">
+        ${renderPanoramaSelectOptions(options, value)}
+      </select>
+      ${help}
+    </label>`;
+  }
+
+  const inputType = field.type || 'text';
+  const minAttr = field.min != null ? ` min="${field.min}"` : '';
+  const maxAttr = field.max != null ? ` max="${field.max}"` : '';
+  const disabledAttr = idLocked ? ' disabled' : '';
+  return `<label class="panorama-form-item">
+    <span class="panorama-form-label">${field.label}${requiredMark}</span>
+    <input type="${inputType}" value="${escapeHtml(value)}" oninput="updatePanoramaEntityFormField('${field.key}', this.value)"${placeholder}${minAttr}${maxAttr}${disabledAttr}>
+    ${help}
+  </label>`;
+}
+
+function getPanoramaStructuredFieldSchema(entityType, data) {
+  if (entityType === 'domain') {
+    return [
+      { key: 'id', label: '领域ID', required: true, placeholder: '如 retail-domain' },
+      { key: 'name', label: '名称', required: true, placeholder: '如 零售银行' },
+      { key: 'code', label: '编码', required: true, placeholder: '如 DOM-RETAIL' },
+      { key: 'status', label: '状态', type: 'select', required: true, options: [{ value: 'ACTIVE', label: 'ACTIVE' }, { value: 'INACTIVE', label: 'INACTIVE' }] },
+      { key: 'priority', label: '优先级', type: 'select', required: true, options: [{ value: 'P0', label: 'P0' }, { value: 'P1', label: 'P1' }, { value: 'P2', label: 'P2' }, { value: 'P3', label: 'P3' }] },
+      { key: 'health', label: '健康度', type: 'select', required: true, options: [{ value: 'good', label: 'good' }, { value: 'warn', label: 'warn' }, { value: 'bad', label: 'bad' }] },
+      { key: 'owner', label: 'Owner', placeholder: '如 张副行长' },
+      { key: 'architect', label: '架构负责人', placeholder: '如 李建国' },
+      { key: 'createdDate', label: '创建日期', type: 'date', required: true },
+      { key: 'lastReviewDate', label: '最近评审', type: 'date', required: true },
+      { key: 'compliance', label: '合规率(%)', type: 'number', min: 0, max: 100 },
+      { key: 'color', label: '主题色', type: 'color' },
+      { key: 'description', label: '描述', type: 'textarea', rows: 3 },
+      { key: 'bizGoal', label: '业务目标', type: 'textarea', rows: 2 }
+    ];
+  }
+
+  if (entityType === 'system') {
+    return [
+      { key: 'id', label: '系统ID', required: true, placeholder: '如 credit-card' },
+      {
+        key: 'domainId',
+        label: '所属业务域',
+        type: 'select',
+        required: true,
+        options: (data.domains || []).map((d) => ({ value: d.id, label: `${d.name} (${d.id})` })),
+        emptyLabel: '请选择业务域'
+      },
+      { key: 'name', label: '系统名称', required: true, placeholder: '如 信用卡系统' },
+      { key: 'code', label: '系统编码', placeholder: '如 SYS-CC' },
+      { key: 'level', label: '分级', type: 'select', required: true, options: [{ value: 'CORE', label: 'CORE' }, { value: 'IMPORTANT', label: 'IMPORTANT' }, { value: 'GENERAL', label: 'GENERAL' }] },
+      { key: 'status', label: '状态', type: 'select', required: true, options: [{ value: 'RUNNING', label: 'RUNNING' }, { value: 'BUILDING', label: 'BUILDING' }, { value: 'PLANNING', label: 'PLANNING' }, { value: 'OFFLINE', label: 'OFFLINE' }, { value: 'RETIRED', label: 'RETIRED' }] },
+      { key: 'owner', label: 'Owner' },
+      { key: 'architect', label: '架构负责人' },
+      { key: 'team', label: '团队' },
+      { key: 'teamSize', label: '团队规模', type: 'number', min: 0 },
+      { key: 'techStack', label: '技术栈', placeholder: '如 Java 17 / Spring Boot' },
+      { key: 'createdDate', label: '创建日期', type: 'date', required: true },
+      { key: 'lastDeployDate', label: '最近部署', type: 'date', required: true },
+      { key: 'deployMode', label: '部署模式', placeholder: '如 容器化(K8S)' },
+      { key: 'dataCenters', label: '数据中心', placeholder: '如 新DC+灾备DC' },
+      { key: 'classification', label: '分类等级', type: 'select', options: [{ value: 'A', label: 'A' }, { value: 'B', label: 'B' }, { value: 'C', label: 'C' }], emptyLabel: '未设置' },
+      { key: 'securityLevel', label: '安全等级', type: 'select', options: [{ value: 'S1', label: 'S1' }, { value: 'S2', label: 'S2' }, { value: 'S3', label: 'S3' }], emptyLabel: '未设置' },
+      { key: 'dataLevel', label: '数据等级', type: 'select', options: [{ value: 'L1', label: 'L1' }, { value: 'L2', label: 'L2' }, { value: 'L3', label: 'L3' }], emptyLabel: '未设置' },
+      { key: 'tags', label: '标签', placeholder: '多个标签用英文逗号分隔' },
+      { key: 'description', label: '描述', type: 'textarea', rows: 3 }
+    ];
+  }
+
+  if (entityType === 'subsystem') {
+    return [
+      { key: 'id', label: '子系统ID', required: true, placeholder: '如 cc-apply' },
+      {
+        key: 'systemId',
+        label: '所属系统',
+        type: 'select',
+        required: true,
+        options: (data.systems || []).map((s) => ({ value: s.id, label: `${s.name} (${s.id})` })),
+        emptyLabel: '请选择系统'
+      },
+      { key: 'name', label: '子系统名称', required: true, placeholder: '如 信用卡申请子系统' },
+      { key: 'code', label: '子系统编码', placeholder: '如 SUB-CC-APPLY' },
+      { key: 'status', label: '状态', type: 'select', required: true, options: [{ value: 'RUNNING', label: 'RUNNING' }, { value: 'BUILDING', label: 'BUILDING' }, { value: 'PLANNING', label: 'PLANNING' }, { value: 'OFFLINE', label: 'OFFLINE' }, { value: 'RETIRED', label: 'RETIRED' }] },
+      { key: 'owner', label: 'Owner' },
+      { key: 'team', label: '团队' },
+      { key: 'techStack', label: '技术栈' },
+      { key: 'createdDate', label: '创建日期', type: 'date', required: true },
+      { key: 'classification', label: '分类等级', type: 'select', options: [{ value: 'A', label: 'A' }, { value: 'B', label: 'B' }, { value: 'C', label: 'C' }], emptyLabel: '未设置' },
+      { key: 'securityLevel', label: '安全等级', type: 'select', options: [{ value: 'S1', label: 'S1' }, { value: 'S2', label: 'S2' }, { value: 'S3', label: 'S3' }], emptyLabel: '未设置' },
+      { key: 'dataLevel', label: '数据等级', type: 'select', options: [{ value: 'L1', label: 'L1' }, { value: 'L2', label: 'L2' }, { value: 'L3', label: 'L3' }], emptyLabel: '未设置' },
+      { key: 'tags', label: '标签', placeholder: '多个标签用英文逗号分隔' },
+      { key: 'description', label: '描述', type: 'textarea', rows: 3 }
+    ];
+  }
+
+  return [
+    { key: 'id', label: '应用ID', required: true, placeholder: '如 card-apply-svc' },
+    {
+      key: 'subsystemId',
+      label: '所属子系统',
+      type: 'select',
+      required: true,
+      options: (data.subsystems || []).map((s) => ({ value: s.id, label: `${s.name} (${s.id})` })),
+      emptyLabel: '请选择子系统'
+    },
+    { key: 'name', label: '应用名称', required: true, placeholder: '如 信用卡申请服务' },
+    { key: 'type', label: '应用类型', type: 'select', required: true, options: [{ value: 'MICROSERVICE', label: 'MICROSERVICE' }, { value: 'MONOLITH', label: 'MONOLITH' }, { value: 'SPA', label: 'SPA' }, { value: 'BATCH', label: 'BATCH' }] },
+    { key: 'status', label: '状态', type: 'select', required: true, options: [{ value: 'RUNNING', label: 'RUNNING' }, { value: 'BUILDING', label: 'BUILDING' }, { value: 'PLANNING', label: 'PLANNING' }, { value: 'OFFLINE', label: 'OFFLINE' }, { value: 'RETIRED', label: 'RETIRED' }] },
+    { key: 'owner', label: 'Owner', required: true },
+    { key: 'gitRepo', label: 'Git仓库', placeholder: '如 https://gitlab.xxx/project.git' },
+    { key: 'classification', label: '分类等级', type: 'select', options: [{ value: 'A', label: 'A' }, { value: 'B', label: 'B' }, { value: 'C', label: 'C' }], emptyLabel: '未设置' },
+    { key: 'securityLevel', label: '安全等级', type: 'select', options: [{ value: 'S1', label: 'S1' }, { value: 'S2', label: 'S2' }, { value: 'S3', label: 'S3' }], emptyLabel: '未设置' },
+    { key: 'dataLevel', label: '数据等级', type: 'select', options: [{ value: 'L1', label: 'L1' }, { value: 'L2', label: 'L2' }, { value: 'L3', label: 'L3' }], emptyLabel: '未设置' },
+    { key: 'tags', label: '标签', placeholder: '多个标签用英文逗号分隔' }
+  ];
+}
+
+function renderPanoramaStructuredForm(entityType, data) {
+  if (!isStructuredPanoramaEntity(entityType)) return '';
+  if (!panoramaAdminFormState.open || panoramaAdminFormState.entityType !== entityType) return '';
+
+  const meta = PANORAMA_ENTITY_META[entityType];
+  const schema = getPanoramaStructuredFieldSchema(entityType, data);
+  const title = panoramaAdminFormState.mode === 'create'
+    ? `新增${meta.label}`
+    : `编辑${meta.label}：${panoramaAdminFormState.entityId}`;
+  const tip = entityType === 'domain'
+    ? '业务域主要维护治理属性与责任归属。'
+    : entityType === 'system'
+      ? '系统必须选择所属业务域，并维护分级和团队信息。'
+      : entityType === 'subsystem'
+        ? '子系统必须绑定系统，建议保持“一个子系统=一个团队+一个技术栈”。'
+        : '应用必须绑定子系统并维护Owner，避免出现无主应用。';
+
+  return `
+    <form class="panorama-form-card fade-in" onsubmit="submitPanoramaEntityForm(event)">
+      <div class="panorama-form-head">
+        <div>
+          <div class="panorama-form-title">${title}</div>
+          <div class="panorama-form-tip">${tip}</div>
+        </div>
+        <div class="panorama-form-head-actions">
+          <button class="btn btn-outline" type="button" onclick="closePanoramaEntityForm()">取消</button>
+          <button class="btn btn-primary" type="submit">${panoramaAdminFormState.mode === 'create' ? '保存并新增' : '保存修改'}</button>
+        </div>
+      </div>
+      <div class="panorama-form-grid">
+        ${schema.map((field) => renderPanoramaField(field)).join('')}
+      </div>
+    </form>
+  `;
+}
+
+function buildPanoramaStructuredPayload(entityType, values) {
+  const v = (key) => String(values[key] == null ? '' : values[key]).trim();
+  if (entityType === 'domain') {
+    return {
+      id: v('id'),
+      name: v('name'),
+      code: v('code'),
+      owner: v('owner'),
+      architect: v('architect'),
+      status: v('status'),
+      priority: v('priority'),
+      health: v('health'),
+      createdDate: v('createdDate'),
+      lastReviewDate: v('lastReviewDate'),
+      compliance: v('compliance'),
+      color: v('color'),
+      description: v('description'),
+      bizGoal: v('bizGoal')
+    };
+  }
+  if (entityType === 'system') {
+    return {
+      id: v('id'),
+      domainId: v('domainId'),
+      name: v('name'),
+      code: v('code'),
+      level: v('level'),
+      status: v('status'),
+      owner: v('owner'),
+      architect: v('architect'),
+      team: v('team'),
+      teamSize: v('teamSize'),
+      techStack: v('techStack'),
+      createdDate: v('createdDate'),
+      lastDeployDate: v('lastDeployDate'),
+      deployMode: v('deployMode'),
+      dataCenters: v('dataCenters'),
+      classification: v('classification'),
+      securityLevel: v('securityLevel'),
+      dataLevel: v('dataLevel'),
+      tags: v('tags'),
+      description: v('description')
+    };
+  }
+  if (entityType === 'subsystem') {
+    return {
+      id: v('id'),
+      systemId: v('systemId'),
+      name: v('name'),
+      code: v('code'),
+      status: v('status'),
+      owner: v('owner'),
+      team: v('team'),
+      techStack: v('techStack'),
+      createdDate: v('createdDate'),
+      classification: v('classification'),
+      securityLevel: v('securityLevel'),
+      dataLevel: v('dataLevel'),
+      tags: v('tags'),
+      description: v('description')
+    };
+  }
+  return {
+    id: v('id'),
+    subsystemId: v('subsystemId'),
+    name: v('name'),
+    type: v('type'),
+    status: v('status'),
+    owner: v('owner'),
+    gitRepo: v('gitRepo'),
+    classification: v('classification'),
+    securityLevel: v('securityLevel'),
+    dataLevel: v('dataLevel'),
+    tags: v('tags')
+  };
+}
+
+function validatePanoramaStructuredPayload(entityType, payload) {
+  if (!payload.id) return 'ID不能为空';
+  if (!payload.name) return '名称不能为空';
+  if (entityType === 'domain') {
+    if (!payload.code) return '编码不能为空';
+    if (!payload.status) return '状态不能为空';
+    if (!payload.createdDate) return '创建日期不能为空';
+  }
+  if (entityType === 'system') {
+    if (!payload.domainId) return '请选择所属业务域';
+    if (!payload.level) return '请选择系统分级';
+  }
+  if (entityType === 'subsystem') {
+    if (!payload.systemId) return '请选择所属系统';
+  }
+  if (entityType === 'application') {
+    if (!payload.subsystemId) return '请选择所属子系统';
+    if (!payload.owner) return 'Owner不能为空';
+  }
+  return '';
+}
+
+async function submitPanoramaEntityForm(event) {
+  if (event) event.preventDefault();
+  const state = panoramaAdminFormState;
+  if (!state.open || !isStructuredPanoramaEntity(state.entityType)) return;
+  const meta = PANORAMA_ENTITY_META[state.entityType];
+  if (!meta) return;
+
+  const payload = buildPanoramaStructuredPayload(state.entityType, state.values || {});
+  const err = validatePanoramaStructuredPayload(state.entityType, payload);
+  if (err) {
+    alert(err);
+    return;
+  }
+
+  try {
+    if (state.mode === 'edit') {
+      await apiRequest(`${meta.path}/${encodeURIComponent(state.entityId)}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload)
+      });
+    } else {
+      await apiRequest(meta.path, {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+    }
+    resetPanoramaAdminFormState();
+    await reloadPanoramaAdminDataAndRender();
+  } catch (error) {
+    alert(`${state.mode === 'edit' ? '更新' : '新增'}${meta.label}失败：${error.message}`);
+  }
+}
+
 function defaultPanoramaEntityTemplate(entityType) {
   const data = getPanoramaAdminData();
   const today = new Date().toISOString().slice(0, 10);
@@ -723,6 +1182,10 @@ function findPanoramaEntity(entityType, id) {
 async function createPanoramaEntityPrompt(entityType) {
   const meta = PANORAMA_ENTITY_META[entityType];
   if (!meta) return;
+  if (isStructuredPanoramaEntity(entityType)) {
+    openPanoramaEntityForm(entityType, 'create');
+    return;
+  }
   const payload = promptJsonInput(`请输入要新增${meta.label}的JSON`, defaultPanoramaEntityTemplate(entityType));
   if (!payload) return;
   try {
@@ -736,6 +1199,10 @@ async function createPanoramaEntityPrompt(entityType) {
 async function editPanoramaEntityPrompt(entityType, entityId) {
   const meta = PANORAMA_ENTITY_META[entityType];
   if (!meta) return;
+  if (isStructuredPanoramaEntity(entityType)) {
+    openPanoramaEntityForm(entityType, 'edit', entityId);
+    return;
+  }
   const current = findPanoramaEntity(entityType, entityId);
   if (!current) {
     alert(`${meta.label}不存在`);
@@ -1297,12 +1764,16 @@ function renderPanoramaAdmin(c, b) {
       <div class="stat-card"><div class="label">应用</div><div class="value" style="color:var(--accent2)">${data.applications.length}</div></div>
     </div>
     <div class="cluster-tabs fade-in" style="margin-top:14px">
-      ${tabs.map((t) => `<div class="cluster-tab ${panoramaAdminEntity === t.key ? 'active' : ''}" onclick="panoramaAdminEntity='${t.key}';render()">${t.label}</div>`).join('')}
+      ${tabs.map((t) => `<div class="cluster-tab ${panoramaAdminEntity === t.key ? 'active' : ''}" onclick="setPanoramaAdminEntity('${t.key}')">${t.label}</div>`).join('')}
     </div>
     <div class="fade-in" style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0 12px">
       <button class="btn btn-primary" onclick="createPanoramaEntityPrompt('${panoramaAdminEntity}')">+ 新增${PANORAMA_ENTITY_META[panoramaAdminEntity].label}</button>
+      ${isStructuredPanoramaEntity(panoramaAdminEntity) && panoramaAdminFormState.open && panoramaAdminFormState.entityType === panoramaAdminEntity
+      ? `<button class="btn btn-outline" onclick="closePanoramaEntityForm()">收起表单</button>`
+      : ''}
       <button class="btn btn-outline" onclick="reloadPanoramaAdminDataAndRender()">↻ 刷新</button>
     </div>
+    ${renderPanoramaStructuredForm(panoramaAdminEntity, data)}
     <table class="review-table fade-in">
       <thead>${tableHeader}</thead>
       <tbody>${renderPanoramaAdminRows(panoramaAdminEntity, data)}</tbody>
@@ -1316,6 +1787,7 @@ function switchView(view) {
   document.querySelector(`[data-view="${view}"]`)?.classList.add('active');
   if (view === 'v1') { v1Level = 0; v1Domain = null; v1System = null; v1Subsystem = null; v1App = null; }
   if (view === 'standards') { stdDetailId = null; }
+  if (view !== 'panoramaAdmin') resetPanoramaAdminFormState();
   render();
 }
 
