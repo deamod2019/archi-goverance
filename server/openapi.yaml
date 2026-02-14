@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Aichi Governance API
-  version: 1.1.0
+  version: 1.2.0
 servers:
   - url: /
 paths:
@@ -11,15 +11,44 @@ paths:
       responses:
         '200': { description: OK }
 
+  /api/v1/meta/version:
+    get:
+      summary: Get service version and revision info
+      responses:
+        '200': { description: Version payload }
+
   /api/v1/bootstrap:
     get:
       summary: Load full bootstrap payload for mockup-compatible frontend
+      parameters:
+        - in: query
+          name: projection
+          schema: { type: string, enum: [full, panorama, directory, standards, review] }
+        - in: query
+          name: sections
+          schema: { type: string, description: Comma-separated section names }
+        - in: query
+          name: review_status
+          schema: { type: string }
       responses:
         '200': { description: Bootstrap payload }
 
   /api/v1/panorama/domains:
     get:
       summary: List panorama domains
+      parameters:
+        - in: query
+          name: health
+          schema: { type: string }
+        - in: query
+          name: priority
+          schema: { type: string }
+        - in: query
+          name: projection
+          schema: { type: string, enum: [full, summary, governance] }
+        - in: query
+          name: fields
+          schema: { type: string, description: Comma-separated field projection paths }
       responses:
         '200': { description: Domain list }
 
@@ -31,6 +60,18 @@ paths:
           name: id
           required: true
           schema: { type: string }
+        - in: query
+          name: level
+          schema: { type: string }
+        - in: query
+          name: status
+          schema: { type: string }
+        - in: query
+          name: projection
+          schema: { type: string, enum: [full, summary, governance] }
+        - in: query
+          name: fields
+          schema: { type: string, description: Comma-separated field projection paths }
       responses:
         '200': { description: Systems list }
 
@@ -42,6 +83,9 @@ paths:
           name: id
           required: true
           schema: { type: string }
+        - in: query
+          name: projection
+          schema: { type: string, enum: [full, summary, flat] }
       responses:
         '200': { description: Architecture payload }
 
@@ -53,6 +97,9 @@ paths:
           name: id
           required: true
           schema: { type: string }
+        - in: query
+          name: projection
+          schema: { type: string, enum: [full, basic] }
       responses:
         '200': { description: Application profile }
 
@@ -122,6 +169,15 @@ paths:
         - in: query
           name: dc_id
           schema: { type: string }
+        - in: query
+          name: dr
+          schema: { type: string }
+        - in: query
+          name: projection
+          schema: { type: string, enum: [full, summary] }
+        - in: query
+          name: fields
+          schema: { type: string, description: Comma-separated field projection paths }
       responses:
         '200': { description: Database clusters }
 
@@ -143,6 +199,15 @@ paths:
         - in: query
           name: type
           schema: { type: string }
+        - in: query
+          name: health
+          schema: { type: string }
+        - in: query
+          name: projection
+          schema: { type: string, enum: [full, summary] }
+        - in: query
+          name: fields
+          schema: { type: string, description: Comma-separated field projection paths }
       responses:
         '200': { description: Middleware clusters }
 
@@ -188,6 +253,10 @@ paths:
   /api/v1/compliance-rules:
     get:
       summary: List compliance rules
+      parameters:
+        - in: query
+          name: fields
+          schema: { type: string, description: Comma-separated field projection paths }
       responses:
         '200': { description: Compliance rule list }
 
@@ -198,6 +267,24 @@ paths:
         - in: query
           name: status
           schema: { type: string }
+        - in: query
+          name: applicant
+          schema: { type: string }
+        - in: query
+          name: type
+          schema: { type: string }
+        - in: query
+          name: from
+          schema: { type: string, format: date }
+        - in: query
+          name: to
+          schema: { type: string, format: date }
+        - in: query
+          name: projection
+          schema: { type: string, enum: [full, summary] }
+        - in: query
+          name: fields
+          schema: { type: string, description: Comma-separated field projection paths }
       responses:
         '200': { description: Review list }
     post:

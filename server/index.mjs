@@ -27,8 +27,58 @@ const pool = new Pool(
 
 const STARTUP_DB_RETRIES = Number.parseInt(process.env.STARTUP_DB_RETRIES || '30', 10);
 const STARTUP_DB_RETRY_MS = Number.parseInt(process.env.STARTUP_DB_RETRY_MS || '2000', 10);
+const API_VERSION = process.env.API_VERSION || '1.2.0';
+const APP_REVISION =
+  process.env.RENDER_GIT_COMMIT ||
+  process.env.RENDER_GIT_BRANCH_COMMIT ||
+  process.env.SOURCE_VERSION ||
+  process.env.GIT_COMMIT ||
+  'dev';
 
 const REQUIRED_SECTIONS = ['MOCK', 'PERSONS', 'TEAMS', 'ARCH_STANDARDS', 'RULE_STD_MAP'];
+
+const BOOTSTRAP_PROJECTIONS = {
+  full: REQUIRED_SECTIONS,
+  panorama: ['MOCK'],
+  directory: ['PERSONS', 'TEAMS'],
+  standards: ['ARCH_STANDARDS', 'RULE_STD_MAP'],
+  review: ['MOCK', 'ARCH_STANDARDS', 'RULE_STD_MAP']
+};
+
+const DOMAIN_PROJECTIONS = {
+  full: null,
+  summary: ['id', 'name', 'apps', 'systems', 'compliance', 'health', 'color'],
+  governance: ['id', 'name', 'owner', 'architect', 'status', 'bizGoal', 'priority']
+};
+
+const SYSTEM_PROJECTIONS = {
+  full: null,
+  summary: ['id', 'name', 'level', 'status', 'apps', 'subsystems', 'dataCenters', 'techStack'],
+  governance: ['id', 'name', 'code', 'level', 'status', 'owner', 'architect', 'lastDeployDate']
+};
+
+const DB_CLUSTER_PROJECTIONS = {
+  full: null,
+  summary: ['id', 'name', 'type', 'mode', 'instances', 'apps', 'dr', 'dc']
+};
+
+const MW_CLUSTER_PROJECTIONS = {
+  full: null,
+  summary: ['id', 'name', 'type', 'product', 'instances', 'producers', 'consumers', 'health']
+};
+
+const REVIEW_PROJECTIONS = {
+  full: null,
+  summary: ['id', 'title', 'type', 'system', 'level', 'applicant', 'date', 'status']
+};
+
+class HttpError extends Error {
+  constructor(statusCode, message) {
+    super(message);
+    this.name = 'HttpError';
+    this.statusCode = statusCode;
+  }
+}
 
 function loadSeedData(seedPath) {
   const source = fs.readFileSync(seedPath, 'utf8');
@@ -274,6 +324,71 @@ async function loadSectionPayload(section) {
   return rows[0].payload;
 }
 
+function parseCsv(rawValue) {
+  if (!rawValue) return [];
+  return rawValue
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+function getByPath(source, pathExpr) {
+  return pathExpr.split('.').reduce((acc, key) => {
+    if (acc == null || typeof acc !== 'object' || !Object.prototype.hasOwnProperty.call(acc, key)) return undefined;
+    return acc[key];
+  }, source);
+}
+
+function setByPath(target, pathExpr, value) {
+  const keys = pathExpr.split('.');
+  let ptr = target;
+  for (let i = 0; i < keys.length; i += 1) {
+    const key = keys[i];
+    if (i === keys.length - 1) {
+      ptr[key] = value;
+      return;
+    }
+    if (!ptr[key] || typeof ptr[key] !== 'object') ptr[key] = {};
+    ptr = ptr[key];
+  }
+}
+
+function projectObject(obj, fields) {
+  if (!fields || !fields.length || obj == null || typeof obj !== 'object' || Array.isArray(obj)) return obj;
+  const out = {};
+  for (const field of fields) {
+    const value = getByPath(obj, field);
+    if (value !== undefined) {
+      setByPath(out, field, value);
+    }
+  }
+  return out;
+}
+
+function projectData(data, fields) {
+  if (!fields || !fields.length) return data;
+  if (Array.isArray(data)) return data.map((item) => projectObject(item, fields));
+  return projectObject(data, fields);
+}
+
+function resolveProjectionFields(url, presetMap) {
+  const projection = (url.searchParams.get('projection') || 'full').trim() || 'full';
+  if (!Object.prototype.hasOwnProperty.call(presetMap, projection)) {
+    throw new HttpError(400, `unsupported projection '${projection}'`);
+  }
+  const fields = parseCsv(url.searchParams.get('fields'));
+  if (fields.length) return fields;
+  return presetMap[projection];
+}
+
+function parseDateFilter(dateText, fieldName) {
+  if (!dateText) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateText)) {
+    throw new HttpError(400, `invalid ${fieldName}, expected YYYY-MM-DD`);
+  }
+  return dateText;
+}
+
 function splitDataCenters(text) {
   return String(text || '')
     .split(/[+,，、]/g)
@@ -364,7 +479,7 @@ function toReviewDto(row) {
   };
 }
 
-async function listReviews(status) {
+async function listReviews(filters = {}) {
   const params = [];
   let sql = `
     SELECT id, title, type, system, level, applicant,
@@ -372,10 +487,33 @@ async function listReviews(status) {
       status
     FROM reviews
   `;
-  if (status) {
-    params.push(status);
-    sql += ` WHERE status = $${params.length}`;
+  const conditions = [];
+
+  if (filters.status) {
+    params.push(filters.status);
+    conditions.push(`status = $${params.length}`);
   }
+  if (filters.applicant) {
+    params.push(filters.applicant);
+    conditions.push(`applicant = $${params.length}`);
+  }
+  if (filters.type) {
+    params.push(filters.type);
+    conditions.push(`type = $${params.length}`);
+  }
+  if (filters.dateFrom) {
+    params.push(filters.dateFrom);
+    conditions.push(`review_date >= $${params.length}::date`);
+  }
+  if (filters.dateTo) {
+    params.push(filters.dateTo);
+    conditions.push(`review_date <= $${params.length}::date`);
+  }
+
+  if (conditions.length) {
+    sql += ` WHERE ${conditions.join(' AND ')}`;
+  }
+
   sql += ' ORDER BY review_date DESC, id DESC';
   const { rows } = await pool.query(sql, params);
   return rows.map(toReviewDto);
@@ -532,17 +670,56 @@ function serveStatic(req, res) {
 }
 
 async function handleApi(req, res, url) {
+  if (req.method === 'GET' && url.pathname === '/api/v1/meta/version') {
+    sendJson(res, 200, {
+      version: API_VERSION,
+      revision: APP_REVISION,
+      node: process.version,
+      env: process.env.NODE_ENV || 'development',
+      timestamp: new Date().toISOString()
+    });
+    return true;
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/v1/bootstrap') {
-    const payload = await loadSectionsPayload();
-    const liveReviews = await listReviews();
-    payload.MOCK.reviews = liveReviews;
+    const projection = (url.searchParams.get('projection') || 'full').trim() || 'full';
+    if (!Object.prototype.hasOwnProperty.call(BOOTSTRAP_PROJECTIONS, projection)) {
+      throw new HttpError(400, `unsupported projection '${projection}'`);
+    }
+
+    const sectionsFromQuery = parseCsv(url.searchParams.get('sections'));
+    const requestedSections = sectionsFromQuery.length ? sectionsFromQuery : BOOTSTRAP_PROJECTIONS[projection];
+    const invalidSection = requestedSections.find((section) => !REQUIRED_SECTIONS.includes(section));
+    if (invalidSection) {
+      throw new HttpError(400, `unsupported section '${invalidSection}'`);
+    }
+
+    const allPayload = await loadSectionsPayload();
+    const payload = {};
+    for (const section of requestedSections) {
+      if (section === 'MOCK') payload.MOCK = { ...(allPayload.MOCK || {}) };
+      else payload[section] = allPayload[section];
+    }
+
+    if (payload.MOCK) {
+      const reviewStatus = url.searchParams.get('review_status');
+      const liveReviews = await listReviews({ status: reviewStatus || undefined });
+      payload.MOCK.reviews = liveReviews;
+    }
+
     sendJson(res, 200, payload);
     return true;
   }
 
   if (req.method === 'GET' && url.pathname === '/api/v1/panorama/domains') {
+    const health = url.searchParams.get('health');
+    const priority = url.searchParams.get('priority');
+    const fields = resolveProjectionFields(url, DOMAIN_PROJECTIONS);
     const { rows } = await pool.query('SELECT payload FROM domains ORDER BY payload->>\'name\'');
-    sendJson(res, 200, rows.map((row) => row.payload));
+    let data = rows.map((row) => row.payload);
+    if (health) data = data.filter((d) => d.health === health);
+    if (priority) data = data.filter((d) => d.priority === priority);
+    sendJson(res, 200, projectData(data, fields));
     return true;
   }
 
@@ -588,8 +765,14 @@ async function handleApi(req, res, url) {
   const domainSystemsMatch = url.pathname.match(/^\/api\/v1\/panorama\/domains\/([^/]+)\/systems$/);
   if (req.method === 'GET' && domainSystemsMatch) {
     const domainId = decodeURIComponent(domainSystemsMatch[1]);
+    const level = url.searchParams.get('level');
+    const status = url.searchParams.get('status');
+    const fields = resolveProjectionFields(url, SYSTEM_PROJECTIONS);
     const { rows } = await pool.query('SELECT payload FROM systems WHERE domain_id = $1 ORDER BY payload->>\'name\'', [domainId]);
-    sendJson(res, 200, rows.map((row) => row.payload));
+    let data = rows.map((row) => row.payload);
+    if (level) data = data.filter((s) => String(s.level).toUpperCase() === String(level).toUpperCase());
+    if (status) data = data.filter((s) => String(s.status).toUpperCase() === String(status).toUpperCase());
+    sendJson(res, 200, projectData(data, fields));
     return true;
   }
 
@@ -618,6 +801,29 @@ async function handleApi(req, res, url) {
       system: systemRes.rows[0].payload,
       subsystems: subsRes.rows.map((row) => ({ ...row.payload, applications: appsBySubsystem.get(row.id) || [] }))
     };
+    const projection = (url.searchParams.get('projection') || 'full').trim() || 'full';
+    if (projection === 'summary') {
+      const appCount = architecture.subsystems.reduce((sum, s) => sum + (s.applications?.length || 0), 0);
+      sendJson(res, 200, {
+        system: projectObject(architecture.system, SYSTEM_PROJECTIONS.summary),
+        subsystems: architecture.subsystems.map((s) => projectObject(s, ['id', 'name', 'owner', 'team', 'status', 'apps'])),
+        stats: {
+          subsystemCount: architecture.subsystems.length,
+          appCount
+        }
+      });
+      return true;
+    }
+    if (projection === 'flat') {
+      sendJson(res, 200, {
+        system: architecture.system,
+        applications: architecture.subsystems.flatMap((s) => (s.applications || []).map((a) => ({ ...a, subsystemId: s.id, subsystemName: s.name })))
+      });
+      return true;
+    }
+    if (projection !== 'full') {
+      throw new HttpError(400, `unsupported projection '${projection}'`);
+    }
     sendJson(res, 200, architecture);
     return true;
   }
@@ -632,7 +838,25 @@ async function handleApi(req, res, url) {
     }
 
     const depsRes = await pool.query('SELECT payload FROM dependencies WHERE source = $1 OR target = $1', [appId]);
-    sendJson(res, 200, { profile: appRes.rows[0].payload, dependencies: depsRes.rows.map((row) => row.payload) });
+    const projection = (url.searchParams.get('projection') || 'full').trim() || 'full';
+    const profile = appRes.rows[0].payload;
+    const dependencies = depsRes.rows.map((row) => row.payload);
+    if (projection === 'basic') {
+      const summary = dependencies.reduce((acc, dep) => {
+        const key = dep.type || 'UNKNOWN';
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      }, {});
+      sendJson(res, 200, {
+        profile: projectObject(profile, ['id', 'name', 'type', 'status', 'owner', 'gitRepo']),
+        dependencySummary: summary
+      });
+      return true;
+    }
+    if (projection !== 'full') {
+      throw new HttpError(400, `unsupported projection '${projection}'`);
+    }
+    sendJson(res, 200, { profile, dependencies });
     return true;
   }
 
@@ -677,9 +901,12 @@ async function handleApi(req, res, url) {
     let clusters = mock.dbClusters || [];
     const type = url.searchParams.get('type');
     const dcId = url.searchParams.get('dc_id');
+    const dr = url.searchParams.get('dr');
+    const fields = resolveProjectionFields(url, DB_CLUSTER_PROJECTIONS);
     if (type) clusters = clusters.filter((c) => String(c.type).toUpperCase() === String(type).toUpperCase());
     if (dcId) clusters = clusters.filter((c) => String(c.dc).includes(dcId));
-    sendJson(res, 200, clusters);
+    if (dr) clusters = clusters.filter((c) => String(c.dr).toUpperCase() === String(dr).toUpperCase());
+    sendJson(res, 200, projectData(clusters, fields));
     return true;
   }
 
@@ -711,6 +938,8 @@ async function handleApi(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/v1/panorama/middleware-clusters') {
     const mock = await loadSectionPayload('MOCK');
     const type = url.searchParams.get('type');
+    const health = url.searchParams.get('health');
+    const fields = resolveProjectionFields(url, MW_CLUSTER_PROJECTIONS);
     let clusters = [];
     if (type) {
       clusters = (mock.mwClusters?.[type] || []).map((c) => ({ ...c, type }));
@@ -719,7 +948,8 @@ async function handleApi(req, res, url) {
         clusters.push(...arr.map((c) => ({ ...c, type: k })));
       }
     }
-    sendJson(res, 200, clusters);
+    if (health) clusters = clusters.filter((c) => String(c.health).toUpperCase() === String(health).toUpperCase());
+    sendJson(res, 200, projectData(clusters, fields));
     return true;
   }
 
@@ -777,15 +1007,25 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/v1/compliance-rules') {
+    const fields = parseCsv(url.searchParams.get('fields'));
     const { rows } = await pool.query('SELECT rule_id, payload FROM compliance_rules ORDER BY rule_id');
-    sendJson(res, 200, rows.map((r) => ({ ruleId: r.rule_id, ...r.payload })));
+    const data = rows.map((r) => ({ ruleId: r.rule_id, ...r.payload }));
+    sendJson(res, 200, projectData(data, fields));
     return true;
   }
 
   if (req.method === 'GET' && url.pathname === '/api/v1/reviews') {
-    const status = url.searchParams.get('status');
-    const reviews = await listReviews(status);
-    sendJson(res, 200, reviews);
+    const fields = resolveProjectionFields(url, REVIEW_PROJECTIONS);
+    const dateFrom = parseDateFilter(url.searchParams.get('from'), 'from');
+    const dateTo = parseDateFilter(url.searchParams.get('to'), 'to');
+    const reviews = await listReviews({
+      status: url.searchParams.get('status') || undefined,
+      applicant: url.searchParams.get('applicant') || undefined,
+      type: url.searchParams.get('type') || undefined,
+      dateFrom,
+      dateTo
+    });
+    sendJson(res, 200, projectData(reviews, fields));
     return true;
   }
 
@@ -966,6 +1206,10 @@ const server = http.createServer(async (req, res) => {
     serveStatic(req, res);
   } catch (error) {
     console.error('[request-error]', error);
+    if (error instanceof HttpError) {
+      sendJson(res, error.statusCode, { error: 'bad_request', message: error.message });
+      return;
+    }
     sendJson(res, 500, { error: 'internal_error', message: error.message });
   }
 });
