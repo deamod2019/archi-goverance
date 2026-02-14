@@ -1,0 +1,12 @@
+{
+  "name": "aichi-governance",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.mjs"
+  },
+  "dependencies": {
+    "pg": "^8.13.3"
+  }
+}

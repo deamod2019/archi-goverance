@@ -1,4 +1,21 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: aichi-governance-postgres
+    environment:
+      - POSTGRES_DB=aichi_governance
+      - POSTGRES_USER=aichi
+      - POSTGRES_PASSWORD=aichi_pwd
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aichi -d aichi_governance"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   aichi-governance:
     build:
       context: .
@@ -8,12 +25,19 @@ services:
       - "8080:8080"
     environment:
       - PORT=8080
-      - DB_PATH=/app/data/governance.db
+      - HOST=0.0.0.0
+      - PGHOST=postgres
+      - PGPORT=5432
+      - PGUSER=aichi
+      - PGPASSWORD=aichi_pwd
+      - PGDATABASE=aichi_governance
       - STATIC_DIR=/app/mockup
       - SEED_FILE=/app/mockup/data.seed.js
-    volumes:
-      - governance_data:/app/data
+      - SEED_FORCE=true
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
-  governance_data:
+  pg_data:

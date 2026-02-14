@@ -61,6 +61,23 @@ function closePopup() {
   document.querySelectorAll('.popup-overlay,.popup-panel').forEach(e => e.remove());
 }
 
+async function apiRequest(url, options = {}) {
+  const response = await fetch(url, {
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    ...options
+  });
+  if (!response.ok) {
+    let message = `HTTP ${response.status}`;
+    try {
+      const err = await response.json();
+      message = err.message || message;
+    } catch { }
+    throw new Error(message);
+  }
+  if (response.status === 204) return null;
+  return response.json();
+}
+
 function switchView(view) {
   currentView = view;
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
@@ -625,6 +642,7 @@ let reviewDecisions = [];
 let reviewMeetingId = null;
 let reviewVerdict = null;
 let reviewMinutes = '';
+let reviewBackendId = null;
 const ALL_TAGS = ['核心交易', '实时处理', '批量任务', '对外接口', '信创', '7×24', '双活部署', '数据敏感', '跨境业务', 'AI/ML'];
 
 function renderReview(c, b) {
@@ -733,28 +751,55 @@ function updateMatchedStandards() {
   if (el) el.innerHTML = renderMatchedStandards(getMatchedStandards());
 }
 
-function submitReviewForm() {
+async function submitReviewForm() {
   // Collect form data
   reviewFormData.title = document.getElementById('rvTitle')?.value || reviewFormData.title;
   reviewFormData.appName = document.getElementById('rvAppName')?.value || reviewFormData.appName;
   reviewFormData.applicant = document.getElementById('rvApplicant')?.value || reviewFormData.applicant;
+  reviewFormData.system = document.getElementById('rvSystem')?.value || reviewFormData.system;
+  reviewFormData.date = document.getElementById('rvDate')?.value || reviewFormData.date;
+  reviewFormData.techStack = document.getElementById('rvTech')?.value || reviewFormData.techStack;
+  reviewFormData.db = document.getElementById('rvDB')?.value || reviewFormData.db;
+  reviewFormData.mq = document.getElementById('rvMQ')?.value || reviewFormData.mq;
+  reviewFormData.deploy = document.getElementById('rvDeploy')?.value || reviewFormData.deploy;
+  reviewFormData.dc = document.getElementById('rvDC')?.value || reviewFormData.dc;
   reviewFormData.classification = document.getElementById('rvClass')?.value || 'B';
   reviewFormData.tags = [...document.querySelectorAll('#tagChecks input:checked')].map(i => i.value);
-  // Gather applicable rules from matched standards
-  const matchedStds = getMatchedStandards();
-  const ruleSet = new Map();
-  matchedStds.forEach(std => {
-    std.rules.forEach(r => { if (!ruleSet.has(r.id)) ruleSet.set(r.id, { ...r, stdId: std.id, stdName: std.name }); });
-  });
-  // Simulate check results
-  reviewChecks = [...ruleSet.values()].map(r => ({
-    ...r,
-    pass: !['R006', 'R008', 'R013'].includes(r.id),
-    exempt: false,
-    exemptReason: ''
-  }));
-  reviewStep = 1;
-  renderReview(document.getElementById('content'), document.getElementById('breadcrumb'));
+
+  try {
+    const created = await apiRequest('/api/v1/reviews', {
+      method: 'POST',
+      body: JSON.stringify({
+        title: reviewFormData.title,
+        type: 'NEW_BUILD',
+        system: reviewFormData.system,
+        level: reviewFormData.classification === 'A' ? 'CORE' : reviewFormData.classification === 'B' ? 'IMPORTANT' : 'GENERAL',
+        applicant: reviewFormData.applicant,
+        date: reviewFormData.date,
+        ...reviewFormData
+      })
+    });
+
+    reviewBackendId = created.id;
+    const submitResult = await apiRequest(`/api/v1/reviews/${encodeURIComponent(reviewBackendId)}/submit`, { method: 'PUT' });
+    reviewChecks = (submitResult.checks || []).map((c) => {
+      const stdInfo = RULE_STD_MAP[c.ruleId];
+      const ruleMeta = stdInfo?.rule || {};
+      return {
+        id: c.ruleId,
+        name: ruleMeta.name || c.message || c.ruleId,
+        level: c.severity,
+        checkMethod: ruleMeta.checkMethod || '巡检',
+        pass: !!c.passed,
+        exempt: false,
+        exemptReason: ''
+      };
+    });
+    reviewStep = 1;
+    renderReview(document.getElementById('content'), document.getElementById('breadcrumb'));
+  } catch (error) {
+    alert(`提交失败：${error.message}`);
+  }
 }
 
 function renderReviewCheck(el) {
@@ -831,7 +876,7 @@ function renderReviewMeeting(el) {
     <h3>👨‍💼 架构评审会</h3>
     <div class="meeting-info">
       <div class="meeting-meta">
-        <span>📋 申请编号: <strong>REV-2026-${String(MOCK.reviews.length + 1).padStart(3, '0')}</strong></span>
+        <span>📋 申请编号: <strong>${reviewBackendId || `REV-2026-${String(MOCK.reviews.length + 1).padStart(3, '0')}`}</strong></span>
         <span>📝 ${reviewFormData.title}</span>
         <span>👤 ${personLink(reviewFormData.applicant)}</span>
       </div>
@@ -887,7 +932,7 @@ function createMeeting() {
   }
 }
 
-function submitReviewDecision() {
+async function submitReviewDecision() {
   const verdict = document.getElementById('rvVerdict')?.value;
   if (!verdict) { alert('请选择评审结论'); return; }
   reviewVerdict = verdict;
@@ -896,6 +941,15 @@ function submitReviewDecision() {
   document.querySelectorAll('.decision-comment').forEach(inp => {
     reviewDecisions[parseInt(inp.dataset.idx)].comment = inp.value;
   });
+  try {
+    if (reviewBackendId) {
+      if (verdict === 'APPROVED') await apiRequest(`/api/v1/reviews/${encodeURIComponent(reviewBackendId)}/approve`, { method: 'PUT' });
+      else await apiRequest(`/api/v1/reviews/${encodeURIComponent(reviewBackendId)}/reject`, { method: 'PUT' });
+    }
+  } catch (error) {
+    alert(`评审决议提交失败：${error.message}`);
+    return;
+  }
   reviewStep = 3;
   renderReview(document.getElementById('content'), document.getElementById('breadcrumb'));
 }
@@ -943,8 +997,8 @@ function renderReviewResult(el) {
   }
 
   html += `<div style="text-align:center;margin-top:24px" class="fade-in">
-    <button class="btn btn-outline" onclick="reviewStep=0;reviewChecks=[];reviewDecisions=[];reviewMeetingId=null;reviewVerdict=null;reviewMinutes='';switchView('dashboard')">返回评审看板</button>
-    <button class="btn btn-primary" onclick="reviewStep=0;reviewChecks=[];reviewDecisions=[];reviewMeetingId=null;reviewVerdict=null;reviewMinutes='';renderReview(document.getElementById('content'),document.getElementById('breadcrumb'))" style="margin-left:12px">新建另一个申请</button>
+    <button class="btn btn-outline" onclick="reviewStep=0;reviewChecks=[];reviewDecisions=[];reviewMeetingId=null;reviewVerdict=null;reviewMinutes='';reviewBackendId=null;switchView('dashboard')">返回评审看板</button>
+    <button class="btn btn-primary" onclick="reviewStep=0;reviewChecks=[];reviewDecisions=[];reviewMeetingId=null;reviewVerdict=null;reviewMinutes='';reviewBackendId=null;renderReview(document.getElementById('content'),document.getElementById('breadcrumb'))" style="margin-left:12px">新建另一个申请</button>
   </div>`;
   el.innerHTML = html;
 }
@@ -952,23 +1006,34 @@ function renderReviewResult(el) {
 // ========== Dashboard ==========
 function renderDashboard(c, b) {
   b.innerHTML = '<span onclick="switchView(\'v1\')">架构评审</span> &gt; 评审看板';
-  const approved = MOCK.reviews.filter(r => r.status === 'APPROVED').length;
-  const reviewing = MOCK.reviews.filter(r => r.status === 'REVIEWING').length;
-  let html = `<div class="stats-row fade-in">
-    <div class="stat-card"><div class="label">评审总数</div><div class="value">${MOCK.reviews.length}</div></div>
-    <div class="stat-card"><div class="label">待评审</div><div class="value" style="color:var(--yellow)">${reviewing}</div></div>
-    <div class="stat-card"><div class="label">通过率</div><div class="value" style="color:var(--green)">${Math.round(approved / (approved + 1) * 100)}%</div></div>
-    <div class="stat-card"><div class="label">平均周期</div><div class="value">4.2</div><div class="sub">天</div></div>
-  </div>
-  <h3 style="font-size:15px;margin-bottom:12px" class="fade-in">评审列表</h3>
-  <table class="review-table fade-in"><thead><tr><th>编号</th><th>标题</th><th>类型</th><th>系统</th><th>等级</th><th>申请人</th><th>日期</th><th>状态</th></tr></thead><tbody>`;
-  MOCK.reviews.forEach(r => {
-    const stCls = r.status === 'REVIEWING' ? 'status-reviewing' : r.status === 'APPROVED' ? 'status-approved' : r.status === 'REJECTED' ? 'status-rejected' : 'status-draft';
-    const stText = r.status === 'REVIEWING' ? '评审中' : r.status === 'APPROVED' ? '已通过' : r.status === 'REJECTED' ? '已驳回' : '草稿';
-    const lvlTag = r.level === 'CORE' ? 'tag-core' : r.level === 'IMPORTANT' ? 'tag-important' : 'tag-general';
-    html += `<tr><td>${r.id}</td><td><strong>${r.title}</strong></td><td>${r.type}</td><td>${r.system}</td><td><span class="tag ${lvlTag}">${r.level}</span></td><td>${r.applicant}</td><td>${r.date}</td><td><span class="status-tag ${stCls}">${stText}</span></td></tr>`;
-  });
-  c.innerHTML = html + '</tbody></table>';
+  c.innerHTML = '<div class="card fade-in"><div class="card-title">加载中</div><div class="card-desc">正在获取评审数据...</div></div>';
+
+  apiRequest('/api/v1/reviews')
+    .then((reviews) => {
+      MOCK.reviews = reviews;
+      const approved = reviews.filter(r => r.status === 'APPROVED').length;
+      const reviewing = reviews.filter(r => r.status === 'REVIEWING').length;
+      const rejected = reviews.filter(r => r.status === 'REJECTED').length;
+      const passRate = approved + rejected > 0 ? Math.round(approved / (approved + rejected) * 100) : 0;
+      let html = `<div class="stats-row fade-in">
+        <div class="stat-card"><div class="label">评审总数</div><div class="value">${reviews.length}</div></div>
+        <div class="stat-card"><div class="label">待评审</div><div class="value" style="color:var(--yellow)">${reviewing}</div></div>
+        <div class="stat-card"><div class="label">通过率</div><div class="value" style="color:var(--green)">${passRate}%</div></div>
+        <div class="stat-card"><div class="label">平均周期</div><div class="value">4.2</div><div class="sub">天</div></div>
+      </div>
+      <h3 style="font-size:15px;margin-bottom:12px" class="fade-in">评审列表</h3>
+      <table class="review-table fade-in"><thead><tr><th>编号</th><th>标题</th><th>类型</th><th>系统</th><th>等级</th><th>申请人</th><th>日期</th><th>状态</th></tr></thead><tbody>`;
+      reviews.forEach(r => {
+        const stCls = r.status === 'REVIEWING' ? 'status-reviewing' : r.status === 'APPROVED' ? 'status-approved' : r.status === 'REJECTED' ? 'status-rejected' : 'status-draft';
+        const stText = r.status === 'REVIEWING' ? '评审中' : r.status === 'APPROVED' ? '已通过' : r.status === 'REJECTED' ? '已驳回' : '草稿';
+        const lvlTag = r.level === 'CORE' ? 'tag-core' : r.level === 'IMPORTANT' ? 'tag-important' : 'tag-general';
+        html += `<tr><td>${r.id}</td><td><strong>${r.title}</strong></td><td>${r.type}</td><td>${r.system || ''}</td><td><span class="tag ${lvlTag}">${r.level || 'GENERAL'}</span></td><td>${r.applicant || ''}</td><td>${r.date}</td><td><span class="status-tag ${stCls}">${stText}</span></td></tr>`;
+      });
+      c.innerHTML = html + '</tbody></table>';
+    })
+    .catch((error) => {
+      c.innerHTML = `<div class="card fade-in" style="border-left:3px solid var(--red)"><div class="card-title">加载失败</div><div class="card-desc">${error.message}</div></div>`;
+    });
 }
 
 // ========== Standards View ==========

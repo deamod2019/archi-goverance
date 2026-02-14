@@ -1,0 +1,138 @@
+openapi: 3.0.3
+info:
+  title: Aichi Governance API
+  version: 1.0.0
+servers:
+  - url: /
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: OK
+  /api/v1/bootstrap:
+    get:
+      summary: Load full bootstrap payload for mockup-compatible frontend
+      responses:
+        '200':
+          description: Bootstrap payload
+  /api/v1/panorama/domains:
+    get:
+      summary: List panorama domains
+      responses:
+        '200':
+          description: Domain list
+  /api/v1/panorama/domains/{id}/systems:
+    get:
+      summary: List systems under a domain
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Systems list
+  /api/v1/panorama/systems/{id}/architecture:
+    get:
+      summary: Get system architecture (subsystems and applications)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Architecture payload
+  /api/v1/panorama/applications/{id}/profile:
+    get:
+      summary: Get application profile and dependencies
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Application profile
+  /api/v1/reviews:
+    get:
+      summary: List reviews
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Review list
+    post:
+      summary: Create review draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, type]
+      responses:
+        '201':
+          description: Review created
+  /api/v1/reviews/{id}/submit:
+    put:
+      summary: Submit review and run compliance checks
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Submit result
+  /api/v1/reviews/{id}/compliance-check:
+    get:
+      summary: List compliance checks for review
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Compliance checks
+  /api/v1/reviews/{id}/approve:
+    put:
+      summary: Approve review
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Approve result
+  /api/v1/reviews/{id}/reject:
+    put:
+      summary: Reject review
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Reject result
+  /api/v1/reviews/dashboard/metrics:
+    get:
+      summary: Review dashboard metrics
+      responses:
+        '200':
+          description: Metrics payload
