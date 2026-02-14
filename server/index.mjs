@@ -2311,6 +2311,91 @@ function normalizeVirtualMachineInput(raw, fallbackId) {
   };
 }
 
+function normalizeNetworkZoneInput(raw, fallbackId) {
+  const id = String(raw?.id || raw?.zoneId || fallbackId || '').trim();
+  const zoneName = String(raw?.zoneName || raw?.name || '').trim();
+  const zoneLevel = String(raw?.zoneLevel || '').trim().toUpperCase();
+  const status = String(raw?.status || 'ACTIVE').trim().toUpperCase();
+  if (!id) throw new HttpError(400, 'network zone id is required');
+  if (!zoneName) throw new HttpError(400, 'network zone zoneName is required');
+  if (!['DMZ', 'INTRANET', 'CORE', 'MGT', 'EXTRANET'].includes(zoneLevel)) {
+    throw new HttpError(400, 'network zone zoneLevel must be one of: DMZ, INTRANET, CORE, MGT, EXTRANET');
+  }
+  if (!['ACTIVE', 'INACTIVE'].includes(status)) {
+    throw new HttpError(400, 'network zone status must be one of: ACTIVE, INACTIVE');
+  }
+  return {
+    id,
+    payload: {
+      zoneId: id,
+      zoneName,
+      zoneLevel,
+      status
+    }
+  };
+}
+
+function normalizeFirewallRuleInput(raw, fallbackId) {
+  const id = String(raw?.id || raw?.ruleId || fallbackId || '').trim();
+  const sourceZoneId = String(raw?.sourceZoneId || raw?.source_zone_id || '').trim();
+  const targetZoneId = String(raw?.targetZoneId || raw?.target_zone_id || '').trim();
+  const protocol = String(raw?.protocol || 'TCP').trim().toUpperCase();
+  const action = String(raw?.action || 'ALLOW').trim().toUpperCase();
+  const port = normalizeNonNegativeInt(raw?.port, 'firewall rule port', 0);
+  const status = String(raw?.status || 'ACTIVE').trim().toUpperCase();
+  if (!id) throw new HttpError(400, 'firewall rule id is required');
+  if (!sourceZoneId) throw new HttpError(400, 'firewall rule sourceZoneId is required');
+  if (!targetZoneId) throw new HttpError(400, 'firewall rule targetZoneId is required');
+  if (!['TCP', 'UDP', 'HTTP', 'HTTPS', 'ICMP', 'ANY'].includes(protocol)) {
+    throw new HttpError(400, 'firewall rule protocol must be one of: TCP, UDP, HTTP, HTTPS, ICMP, ANY');
+  }
+  if (!['ALLOW', 'DENY'].includes(action)) {
+    throw new HttpError(400, 'firewall rule action must be one of: ALLOW, DENY');
+  }
+  if (!['ACTIVE', 'INACTIVE'].includes(status)) {
+    throw new HttpError(400, 'firewall rule status must be one of: ACTIVE, INACTIVE');
+  }
+  return {
+    id,
+    sourceZoneId,
+    targetZoneId,
+    payload: {
+      ruleId: id,
+      sourceZoneId,
+      targetZoneId,
+      protocol,
+      port,
+      action,
+      status
+    }
+  };
+}
+
+function normalizeVipInput(raw, fallbackId) {
+  const id = String(raw?.id || raw?.vipId || fallbackId || '').trim();
+  const appId = String(raw?.appId || raw?.app_id || '').trim();
+  const vipAddress = String(raw?.vipAddress || '').trim();
+  const domainName = String(raw?.domainName || '').trim();
+  const status = String(raw?.status || 'RUNNING').trim().toUpperCase();
+  if (!id) throw new HttpError(400, 'vip id is required');
+  if (!appId) throw new HttpError(400, 'vip appId is required');
+  if (!vipAddress) throw new HttpError(400, 'vip vipAddress is required');
+  if (!['RUNNING', 'OFFLINE', 'DEGRADED'].includes(status)) {
+    throw new HttpError(400, 'vip status must be one of: RUNNING, OFFLINE, DEGRADED');
+  }
+  return {
+    id,
+    appId,
+    payload: {
+      vipId: id,
+      appId,
+      vipAddress,
+      domainName,
+      status
+    }
+  };
+}
+
 async function resolveDependencyNodePayload(client, nodeId) {
   const existing = await client.query('SELECT payload FROM dependency_nodes WHERE id = $1', [nodeId]);
   if (existing.rows.length) {
@@ -5851,6 +5936,271 @@ async function handleApi(req, res, url) {
       return true;
     }
     sendJson(res, 200, { id: vmId, deleted: true });
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/network-zones') {
+    const { rows } = await pool.query(
+      `
+      SELECT
+        nz.id,
+        nz.payload,
+        (SELECT COUNT(*)::int FROM firewall_rules fw WHERE fw.source_zone_id = nz.id) AS outbound_rules,
+        (SELECT COUNT(*)::int FROM firewall_rules fw WHERE fw.target_zone_id = nz.id) AS inbound_rules
+      FROM network_zones nz
+      ORDER BY nz.id
+      `
+    );
+    sendJson(
+      res,
+      200,
+      rows.map((row) => ({
+        ...row.payload,
+        id: row.id,
+        zoneId: row.payload?.zoneId || row.id,
+        outboundRules: row.outbound_rules || 0,
+        inboundRules: row.inbound_rules || 0
+      }))
+    );
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/panorama/network-zones') {
+    const body = await readJsonBody(req);
+    const zone = normalizeNetworkZoneInput(body);
+    try {
+      await pool.query('INSERT INTO network_zones (id, payload) VALUES ($1, $2::jsonb)', [zone.id, JSON.stringify(zone.payload)]);
+    } catch (error) {
+      if (String(error.code) === '23505') throw new HttpError(409, `network zone '${zone.id}' already exists`);
+      throw error;
+    }
+    sendJson(res, 201, { id: zone.id, ...zone.payload });
+    return true;
+  }
+
+  const networkZoneItemMatch = url.pathname.match(/^\/api\/v1\/panorama\/network-zones\/([^/]+)$/);
+  if (req.method === 'PUT' && networkZoneItemMatch) {
+    const zoneId = decodeURIComponent(networkZoneItemMatch[1]);
+    const body = await readJsonBody(req);
+    const current = await pool.query('SELECT payload FROM network_zones WHERE id = $1', [zoneId]);
+    if (!current.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'network zone not found' });
+      return true;
+    }
+    const merged = { ...current.rows[0].payload, ...body, id: zoneId, zoneId };
+    const zone = normalizeNetworkZoneInput(merged, zoneId);
+    await pool.query('UPDATE network_zones SET payload = $2::jsonb, updated_at = now() WHERE id = $1', [zoneId, JSON.stringify(zone.payload)]);
+    sendJson(res, 200, { id: zoneId, ...zone.payload });
+    return true;
+  }
+
+  if (req.method === 'DELETE' && networkZoneItemMatch) {
+    const zoneId = decodeURIComponent(networkZoneItemMatch[1]);
+    const summaryRes = await pool.query(
+      `
+      SELECT
+        (SELECT COUNT(*)::int FROM firewall_rules WHERE source_zone_id = $1) AS outbound_rules,
+        (SELECT COUNT(*)::int FROM firewall_rules WHERE target_zone_id = $1) AS inbound_rules
+      `,
+      [zoneId]
+    );
+    const deleted = await pool.query('DELETE FROM network_zones WHERE id = $1 RETURNING id', [zoneId]);
+    if (!deleted.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'network zone not found' });
+      return true;
+    }
+    sendJson(res, 200, { id: zoneId, deleted: true, cascade: summaryRes.rows[0] || {} });
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/firewall-rules') {
+    const sourceZoneId = url.searchParams.get('source_zone_id');
+    const targetZoneId = url.searchParams.get('target_zone_id');
+    const params = [];
+    const conditions = [];
+    let sql = `
+      SELECT
+        fw.id,
+        fw.source_zone_id,
+        fw.target_zone_id,
+        fw.payload,
+        src.payload AS source_zone_payload,
+        tgt.payload AS target_zone_payload
+      FROM firewall_rules fw
+      JOIN network_zones src ON src.id = fw.source_zone_id
+      JOIN network_zones tgt ON tgt.id = fw.target_zone_id
+    `;
+    if (sourceZoneId) {
+      params.push(sourceZoneId);
+      conditions.push(`fw.source_zone_id = $${params.length}`);
+    }
+    if (targetZoneId) {
+      params.push(targetZoneId);
+      conditions.push(`fw.target_zone_id = $${params.length}`);
+    }
+    if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
+    sql += ' ORDER BY fw.id';
+    const { rows } = await pool.query(sql, params);
+    sendJson(
+      res,
+      200,
+      rows.map((row) => ({
+        ...row.payload,
+        id: row.id,
+        ruleId: row.payload?.ruleId || row.id,
+        sourceZoneId: row.source_zone_id,
+        sourceZoneName: row.source_zone_payload?.zoneName || row.source_zone_id,
+        targetZoneId: row.target_zone_id,
+        targetZoneName: row.target_zone_payload?.zoneName || row.target_zone_id
+      }))
+    );
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/panorama/firewall-rules') {
+    const body = await readJsonBody(req);
+    const rule = normalizeFirewallRuleInput(body);
+    const [sourceRes, targetRes] = await Promise.all([
+      pool.query('SELECT 1 FROM network_zones WHERE id = $1', [rule.sourceZoneId]),
+      pool.query('SELECT 1 FROM network_zones WHERE id = $1', [rule.targetZoneId])
+    ]);
+    if (!sourceRes.rows.length) throw new HttpError(400, `source zone '${rule.sourceZoneId}' does not exist`);
+    if (!targetRes.rows.length) throw new HttpError(400, `target zone '${rule.targetZoneId}' does not exist`);
+    try {
+      await pool.query(
+        'INSERT INTO firewall_rules (id, source_zone_id, target_zone_id, payload) VALUES ($1, $2, $3, $4::jsonb)',
+        [rule.id, rule.sourceZoneId, rule.targetZoneId, JSON.stringify(rule.payload)]
+      );
+    } catch (error) {
+      if (String(error.code) === '23505') throw new HttpError(409, `firewall rule '${rule.id}' already exists`);
+      throw error;
+    }
+    sendJson(res, 201, { id: rule.id, ...rule.payload });
+    return true;
+  }
+
+  const firewallRuleItemMatch = url.pathname.match(/^\/api\/v1\/panorama\/firewall-rules\/([^/]+)$/);
+  if (req.method === 'PUT' && firewallRuleItemMatch) {
+    const ruleId = decodeURIComponent(firewallRuleItemMatch[1]);
+    const body = await readJsonBody(req);
+    const current = await pool.query('SELECT source_zone_id, target_zone_id, payload FROM firewall_rules WHERE id = $1', [ruleId]);
+    if (!current.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'firewall rule not found' });
+      return true;
+    }
+    const merged = {
+      ...current.rows[0].payload,
+      ...body,
+      id: ruleId,
+      ruleId,
+      sourceZoneId: body?.sourceZoneId != null ? body.sourceZoneId : current.rows[0].source_zone_id,
+      targetZoneId: body?.targetZoneId != null ? body.targetZoneId : current.rows[0].target_zone_id
+    };
+    const rule = normalizeFirewallRuleInput(merged, ruleId);
+    const [sourceRes, targetRes] = await Promise.all([
+      pool.query('SELECT 1 FROM network_zones WHERE id = $1', [rule.sourceZoneId]),
+      pool.query('SELECT 1 FROM network_zones WHERE id = $1', [rule.targetZoneId])
+    ]);
+    if (!sourceRes.rows.length) throw new HttpError(400, `source zone '${rule.sourceZoneId}' does not exist`);
+    if (!targetRes.rows.length) throw new HttpError(400, `target zone '${rule.targetZoneId}' does not exist`);
+    await pool.query(
+      'UPDATE firewall_rules SET source_zone_id = $2, target_zone_id = $3, payload = $4::jsonb WHERE id = $1',
+      [ruleId, rule.sourceZoneId, rule.targetZoneId, JSON.stringify(rule.payload)]
+    );
+    sendJson(res, 200, { id: ruleId, ...rule.payload });
+    return true;
+  }
+
+  if (req.method === 'DELETE' && firewallRuleItemMatch) {
+    const ruleId = decodeURIComponent(firewallRuleItemMatch[1]);
+    const deleted = await pool.query('DELETE FROM firewall_rules WHERE id = $1 RETURNING id', [ruleId]);
+    if (!deleted.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'firewall rule not found' });
+      return true;
+    }
+    sendJson(res, 200, { id: ruleId, deleted: true });
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/vips') {
+    const appId = url.searchParams.get('app_id');
+    const params = [];
+    let sql = `
+      SELECT
+        v.id,
+        v.app_id,
+        v.payload,
+        a.payload AS app_payload
+      FROM vips v
+      JOIN applications a ON a.id = v.app_id
+    `;
+    if (appId) {
+      params.push(appId);
+      sql += ` WHERE v.app_id = $${params.length}`;
+    }
+    sql += ' ORDER BY v.id';
+    const { rows } = await pool.query(sql, params);
+    sendJson(
+      res,
+      200,
+      rows.map((row) => ({
+        ...row.payload,
+        id: row.id,
+        vipId: row.payload?.vipId || row.id,
+        appId: row.app_id,
+        appName: row.app_payload?.name || row.app_id
+      }))
+    );
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/panorama/vips') {
+    const body = await readJsonBody(req);
+    const vip = normalizeVipInput(body);
+    const appRes = await pool.query('SELECT 1 FROM applications WHERE id = $1', [vip.appId]);
+    if (!appRes.rows.length) throw new HttpError(400, `application '${vip.appId}' does not exist`);
+    try {
+      await pool.query('INSERT INTO vips (id, app_id, payload) VALUES ($1, $2, $3::jsonb)', [vip.id, vip.appId, JSON.stringify(vip.payload)]);
+    } catch (error) {
+      if (String(error.code) === '23505') throw new HttpError(409, `vip '${vip.id}' already exists`);
+      throw error;
+    }
+    sendJson(res, 201, { id: vip.id, ...vip.payload });
+    return true;
+  }
+
+  const vipItemMatch = url.pathname.match(/^\/api\/v1\/panorama\/vips\/([^/]+)$/);
+  if (req.method === 'PUT' && vipItemMatch) {
+    const vipId = decodeURIComponent(vipItemMatch[1]);
+    const body = await readJsonBody(req);
+    const current = await pool.query('SELECT app_id, payload FROM vips WHERE id = $1', [vipId]);
+    if (!current.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'vip not found' });
+      return true;
+    }
+    const merged = {
+      ...current.rows[0].payload,
+      ...body,
+      id: vipId,
+      vipId,
+      appId: body?.appId != null ? body.appId : current.rows[0].app_id
+    };
+    const vip = normalizeVipInput(merged, vipId);
+    const appRes = await pool.query('SELECT 1 FROM applications WHERE id = $1', [vip.appId]);
+    if (!appRes.rows.length) throw new HttpError(400, `application '${vip.appId}' does not exist`);
+    await pool.query('UPDATE vips SET app_id = $2, payload = $3::jsonb, updated_at = now() WHERE id = $1', [vipId, vip.appId, JSON.stringify(vip.payload)]);
+    sendJson(res, 200, { id: vipId, ...vip.payload });
+    return true;
+  }
+
+  if (req.method === 'DELETE' && vipItemMatch) {
+    const vipId = decodeURIComponent(vipItemMatch[1]);
+    const deleted = await pool.query('DELETE FROM vips WHERE id = $1 RETURNING id', [vipId]);
+    if (!deleted.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'vip not found' });
+      return true;
+    }
+    sendJson(res, 200, { id: vipId, deleted: true });
     return true;
   }
 

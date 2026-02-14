@@ -259,6 +259,9 @@ const PANORAMA_ENTITY_META = {
   rack: { label: '机柜', path: '/api/v1/panorama/racks' },
   physicalServer: { label: '物理机', path: '/api/v1/panorama/physical-servers' },
   virtualMachine: { label: '虚拟机', path: '/api/v1/panorama/virtual-machines' },
+  networkZone: { label: '网络分区', path: '/api/v1/panorama/network-zones' },
+  firewallRule: { label: '防火墙规则', path: '/api/v1/panorama/firewall-rules' },
+  vip: { label: 'VIP', path: '/api/v1/panorama/vips' },
   techComponent: { label: '技术组件', path: '/api/v1/tech-components' },
   appTechRelation: { label: '应用技术关系', path: '/api/v1/panorama/app-tech-relations' },
   artifact: { label: '制品', path: '/api/v1/panorama/artifacts' },
@@ -289,6 +292,9 @@ function getPanoramaAdminData() {
     racks: [],
     physicalServers: [],
     virtualMachines: [],
+    networkZones: [],
+    firewallRules: [],
+    vips: [],
     techComponents: [],
     appTechRelations: [],
     artifacts: [],
@@ -318,13 +324,16 @@ function fetchPanoramaAdminData() {
     apiRequest('/api/v1/panorama/racks'),
     apiRequest('/api/v1/panorama/physical-servers'),
     apiRequest('/api/v1/panorama/virtual-machines'),
+    apiRequest('/api/v1/panorama/network-zones'),
+    apiRequest('/api/v1/panorama/firewall-rules'),
+    apiRequest('/api/v1/panorama/vips'),
     apiRequest('/api/v1/tech-components'),
     apiRequest('/api/v1/panorama/app-tech-relations'),
     apiRequest('/api/v1/panorama/artifacts'),
     apiRequest('/api/v1/panorama/data-objects'),
     apiRequest('/api/v1/panorama/api-groups'),
     apiRequest('/api/v1/panorama/api-endpoints')
-  ]).then(([domains, systems, subsystems, applications, dependencies, dbClusters, mwClusters, dataCenters, lbDomains, otelServices, otelInstances, k8sClusters, k8sNamespaces, k8sContainers, machineRooms, racks, physicalServers, virtualMachines, techComponents, appTechRelations, artifacts, dataObjects, apiGroups, apiEndpoints]) => ({
+  ]).then(([domains, systems, subsystems, applications, dependencies, dbClusters, mwClusters, dataCenters, lbDomains, otelServices, otelInstances, k8sClusters, k8sNamespaces, k8sContainers, machineRooms, racks, physicalServers, virtualMachines, networkZones, firewallRules, vips, techComponents, appTechRelations, artifacts, dataObjects, apiGroups, apiEndpoints]) => ({
     domains: domains || [],
     systems: systems || [],
     subsystems: subsystems || [],
@@ -343,6 +352,9 @@ function fetchPanoramaAdminData() {
     racks: racks || [],
     physicalServers: physicalServers || [],
     virtualMachines: virtualMachines || [],
+    networkZones: networkZones || [],
+    firewallRules: firewallRules || [],
+    vips: vips || [],
     techComponents: techComponents || [],
     appTechRelations: appTechRelations || [],
     artifacts: artifacts || [],
@@ -587,6 +599,34 @@ function defaultPanoramaEntityTemplate(entityType) {
       status: 'RUNNING'
     };
   }
+  if (entityType === 'networkZone') {
+    return {
+      id: `zone-${Date.now()}`,
+      zoneName: '新网络分区',
+      zoneLevel: 'INTRANET',
+      status: 'ACTIVE'
+    };
+  }
+  if (entityType === 'firewallRule') {
+    return {
+      id: `fw-${Date.now()}`,
+      sourceZoneId: data.networkZones[0]?.id || '',
+      targetZoneId: data.networkZones[1]?.id || data.networkZones[0]?.id || '',
+      protocol: 'TCP',
+      port: 443,
+      action: 'ALLOW',
+      status: 'ACTIVE'
+    };
+  }
+  if (entityType === 'vip') {
+    return {
+      id: `vip-${Date.now()}`,
+      appId: data.applications[0]?.id || '',
+      vipAddress: '10.1.1.100',
+      domainName: '',
+      status: 'RUNNING'
+    };
+  }
   if (entityType === 'techComponent') {
     return {
       id: `comp-${Date.now()}`,
@@ -669,6 +709,9 @@ function findPanoramaEntity(entityType, id) {
   if (entityType === 'rack') return data.racks.find((x) => String(x.id) === String(id));
   if (entityType === 'physicalServer') return data.physicalServers.find((x) => String(x.id) === String(id));
   if (entityType === 'virtualMachine') return data.virtualMachines.find((x) => String(x.id) === String(id));
+  if (entityType === 'networkZone') return data.networkZones.find((x) => String(x.id) === String(id));
+  if (entityType === 'firewallRule') return data.firewallRules.find((x) => String(x.id) === String(id));
+  if (entityType === 'vip') return data.vips.find((x) => String(x.id) === String(id));
   if (entityType === 'techComponent') return data.techComponents.find((x) => x.id === id);
   if (entityType === 'appTechRelation') return data.appTechRelations.find((x) => String(x.id) === String(id));
   if (entityType === 'artifact') return data.artifacts.find((x) => x.id === id);
@@ -985,6 +1028,48 @@ function renderPanoramaAdminRows(entityType, data) {
       </td>
     </tr>`).join('');
   }
+  if (entityType === 'networkZone') {
+    return (data.networkZones || []).map((zone) => `<tr>
+      <td><strong>${zone.id}</strong></td>
+      <td>${zone.zoneName || '-'}</td>
+      <td>${zone.zoneLevel || '-'}</td>
+      <td>${zone.status || '-'}</td>
+      <td>${zone.outboundRules || 0}</td>
+      <td>${zone.inboundRules || 0}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-outline" style="padding:4px 8px" onclick="editPanoramaEntityPrompt('networkZone','${zone.id}')">编辑</button>
+        <button class="btn btn-outline" style="padding:4px 8px;color:var(--red)" onclick="deletePanoramaEntity('networkZone','${zone.id}')">删除</button>
+      </td>
+    </tr>`).join('');
+  }
+  if (entityType === 'firewallRule') {
+    return (data.firewallRules || []).map((rule) => `<tr>
+      <td><strong>${rule.id}</strong></td>
+      <td>${rule.sourceZoneName || rule.sourceZoneId || '-'}</td>
+      <td>${rule.targetZoneName || rule.targetZoneId || '-'}</td>
+      <td>${rule.protocol || '-'}</td>
+      <td>${rule.port ?? '-'}</td>
+      <td>${rule.action || '-'}</td>
+      <td>${rule.status || '-'}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-outline" style="padding:4px 8px" onclick="editPanoramaEntityPrompt('firewallRule','${rule.id}')">编辑</button>
+        <button class="btn btn-outline" style="padding:4px 8px;color:var(--red)" onclick="deletePanoramaEntity('firewallRule','${rule.id}')">删除</button>
+      </td>
+    </tr>`).join('');
+  }
+  if (entityType === 'vip') {
+    return (data.vips || []).map((vip) => `<tr>
+      <td><strong>${vip.id}</strong></td>
+      <td>${vip.vipAddress || '-'}</td>
+      <td>${vip.appName || vip.appId || '-'}</td>
+      <td>${vip.domainName || '-'}</td>
+      <td>${vip.status || '-'}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-outline" style="padding:4px 8px" onclick="editPanoramaEntityPrompt('vip','${vip.id}')">编辑</button>
+        <button class="btn btn-outline" style="padding:4px 8px;color:var(--red)" onclick="deletePanoramaEntity('vip','${vip.id}')">删除</button>
+      </td>
+    </tr>`).join('');
+  }
   if (entityType === 'techComponent') {
     return (data.techComponents || []).map((comp) => `<tr>
       <td><strong>${comp.id}</strong></td>
@@ -1111,6 +1196,9 @@ function renderPanoramaAdmin(c, b) {
     racks: [],
     physicalServers: [],
     virtualMachines: [],
+    networkZones: [],
+    firewallRules: [],
+    vips: [],
     techComponents: [],
     appTechRelations: [],
     artifacts: [],
@@ -1137,6 +1225,9 @@ function renderPanoramaAdmin(c, b) {
     { key: 'rack', label: `机柜 (${data.racks.length})` },
     { key: 'physicalServer', label: `物理机 (${data.physicalServers.length})` },
     { key: 'virtualMachine', label: `虚拟机 (${data.virtualMachines.length})` },
+    { key: 'networkZone', label: `网络分区 (${data.networkZones.length})` },
+    { key: 'firewallRule', label: `防火墙规则 (${data.firewallRules.length})` },
+    { key: 'vip', label: `VIP (${data.vips.length})` },
     { key: 'techComponent', label: `技术组件 (${data.techComponents.length})` },
     { key: 'appTechRelation', label: `应用技术关系 (${data.appTechRelations.length})` },
     { key: 'artifact', label: `制品 (${data.artifacts.length})` },
@@ -1180,6 +1271,12 @@ function renderPanoramaAdmin(c, b) {
                                     ? '<tr><th>ID</th><th>序列号</th><th>机柜</th><th>数据中心</th><th>OS类型</th><th>状态</th><th>VM数</th><th>操作</th></tr>'
                                     : panoramaAdminEntity === 'virtualMachine'
                                       ? '<tr><th>ID</th><th>IP</th><th>物理机</th><th>数据中心</th><th>OS类型</th><th>状态</th><th>操作</th></tr>'
+                                      : panoramaAdminEntity === 'networkZone'
+                                        ? '<tr><th>ID</th><th>分区名称</th><th>分区级别</th><th>状态</th><th>出向规则</th><th>入向规则</th><th>操作</th></tr>'
+                                        : panoramaAdminEntity === 'firewallRule'
+                                          ? '<tr><th>ID</th><th>源分区</th><th>目标分区</th><th>协议</th><th>端口</th><th>动作</th><th>状态</th><th>操作</th></tr>'
+                                          : panoramaAdminEntity === 'vip'
+                                            ? '<tr><th>ID</th><th>VIP地址</th><th>应用</th><th>域名</th><th>状态</th><th>操作</th></tr>'
                         : panoramaAdminEntity === 'techComponent'
                           ? '<tr><th>ID</th><th>组件名</th><th>类别</th><th>生命周期</th><th>版本</th><th>供应商</th><th>状态</th><th>操作</th></tr>'
                           : panoramaAdminEntity === 'appTechRelation'

@@ -1174,6 +1174,137 @@ paths:
       responses:
         '200': { description: Delete result }
 
+  /api/v1/panorama/network-zones:
+    get:
+      summary: List panorama network zones
+      responses:
+        '200': { description: Network zone list }
+    post:
+      summary: Create panorama network zone
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created network zone }
+
+  /api/v1/panorama/network-zones/{id}:
+    put:
+      summary: Update panorama network zone
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated network zone }
+    delete:
+      summary: Delete panorama network zone
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Delete result }
+
+  /api/v1/panorama/firewall-rules:
+    get:
+      summary: List panorama firewall rules
+      parameters:
+        - in: query
+          name: source_zone_id
+          schema: { type: string }
+        - in: query
+          name: target_zone_id
+          schema: { type: string }
+      responses:
+        '200': { description: Firewall rule list }
+    post:
+      summary: Create panorama firewall rule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created firewall rule }
+
+  /api/v1/panorama/firewall-rules/{id}:
+    put:
+      summary: Update panorama firewall rule
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated firewall rule }
+    delete:
+      summary: Delete panorama firewall rule
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Delete result }
+
+  /api/v1/panorama/vips:
+    get:
+      summary: List panorama VIPs
+      parameters:
+        - in: query
+          name: app_id
+          schema: { type: string }
+      responses:
+        '200': { description: VIP list }
+    post:
+      summary: Create panorama VIP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created VIP }
+
+  /api/v1/panorama/vips/{id}:
+    put:
+      summary: Update panorama VIP
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated VIP }
+    delete:
+      summary: Delete panorama VIP
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Delete result }
+
   /api/v1/panorama/artifacts:
     get:
       summary: List panorama artifacts
