@@ -252,6 +252,9 @@ const PANORAMA_ENTITY_META = {
   lbDomain: { label: 'LB域名', path: '/api/v1/panorama/lb-domains' },
   otelService: { label: 'OTel服务', path: '/api/v1/panorama/otel-services' },
   otelInstance: { label: 'OTel实例', path: '/api/v1/panorama/otel-instances' },
+  k8sCluster: { label: 'K8S集群', path: '/api/v1/panorama/k8s-clusters' },
+  k8sNamespace: { label: 'K8S命名空间', path: '/api/v1/panorama/k8s-namespaces' },
+  k8sContainer: { label: 'K8S容器', path: '/api/v1/panorama/containers' },
   techComponent: { label: '技术组件', path: '/api/v1/tech-components' },
   appTechRelation: { label: '应用技术关系', path: '/api/v1/panorama/app-tech-relations' },
   artifact: { label: '制品', path: '/api/v1/panorama/artifacts' },
@@ -275,6 +278,9 @@ function getPanoramaAdminData() {
     lbDomains: [],
     otelServices: [],
     otelInstances: [],
+    k8sClusters: [],
+    k8sNamespaces: [],
+    k8sContainers: [],
     techComponents: [],
     appTechRelations: [],
     artifacts: [],
@@ -297,13 +303,16 @@ function fetchPanoramaAdminData() {
     apiRequest('/api/v1/panorama/lb-domains'),
     apiRequest('/api/v1/panorama/otel-services'),
     apiRequest('/api/v1/panorama/otel-instances'),
+    apiRequest('/api/v1/panorama/k8s-clusters'),
+    apiRequest('/api/v1/panorama/k8s-namespaces'),
+    apiRequest('/api/v1/panorama/containers'),
     apiRequest('/api/v1/tech-components'),
     apiRequest('/api/v1/panorama/app-tech-relations'),
     apiRequest('/api/v1/panorama/artifacts'),
     apiRequest('/api/v1/panorama/data-objects'),
     apiRequest('/api/v1/panorama/api-groups'),
     apiRequest('/api/v1/panorama/api-endpoints')
-  ]).then(([domains, systems, subsystems, applications, dependencies, dbClusters, mwClusters, dataCenters, lbDomains, otelServices, otelInstances, techComponents, appTechRelations, artifacts, dataObjects, apiGroups, apiEndpoints]) => ({
+  ]).then(([domains, systems, subsystems, applications, dependencies, dbClusters, mwClusters, dataCenters, lbDomains, otelServices, otelInstances, k8sClusters, k8sNamespaces, k8sContainers, techComponents, appTechRelations, artifacts, dataObjects, apiGroups, apiEndpoints]) => ({
     domains: domains || [],
     systems: systems || [],
     subsystems: subsystems || [],
@@ -315,6 +324,9 @@ function fetchPanoramaAdminData() {
     lbDomains: lbDomains || [],
     otelServices: otelServices || [],
     otelInstances: otelInstances || [],
+    k8sClusters: k8sClusters || [],
+    k8sNamespaces: k8sNamespaces || [],
+    k8sContainers: k8sContainers || [],
     techComponents: techComponents || [],
     appTechRelations: appTechRelations || [],
     artifacts: artifacts || [],
@@ -495,6 +507,34 @@ function defaultPanoramaEntityTemplate(entityType) {
       lastSeenAt: `${today}T00:00:00Z`
     };
   }
+  if (entityType === 'k8sCluster') {
+    return {
+      id: `k8s-${Date.now()}`,
+      clusterName: '新K8S集群',
+      clusterType: 'PROD',
+      region: 'cn-sh',
+      status: 'ACTIVE'
+    };
+  }
+  if (entityType === 'k8sNamespace') {
+    return {
+      id: `ns-${Date.now()}`,
+      clusterId: data.k8sClusters[0]?.id || '',
+      namespaceName: 'new-prod',
+      env: 'PROD',
+      status: 'ACTIVE'
+    };
+  }
+  if (entityType === 'k8sContainer') {
+    return {
+      id: `ctr-${Date.now()}`,
+      namespaceId: data.k8sNamespaces[0]?.id || '',
+      vmId: '',
+      podName: 'new-pod-01',
+      status: 'RUNNING',
+      image: ''
+    };
+  }
   if (entityType === 'techComponent') {
     return {
       id: `comp-${Date.now()}`,
@@ -570,6 +610,9 @@ function findPanoramaEntity(entityType, id) {
   if (entityType === 'lbDomain') return data.lbDomains.find((x) => x.id === id);
   if (entityType === 'otelService') return data.otelServices.find((x) => x.id === id);
   if (entityType === 'otelInstance') return data.otelInstances.find((x) => String(x.id) === String(id));
+  if (entityType === 'k8sCluster') return data.k8sClusters.find((x) => String(x.id) === String(id));
+  if (entityType === 'k8sNamespace') return data.k8sNamespaces.find((x) => String(x.id) === String(id));
+  if (entityType === 'k8sContainer') return data.k8sContainers.find((x) => String(x.id) === String(id));
   if (entityType === 'techComponent') return data.techComponents.find((x) => x.id === id);
   if (entityType === 'appTechRelation') return data.appTechRelations.find((x) => String(x.id) === String(id));
   if (entityType === 'artifact') return data.artifacts.find((x) => x.id === id);
@@ -787,6 +830,48 @@ function renderPanoramaAdminRows(entityType, data) {
       </td>
     </tr>`).join('');
   }
+  if (entityType === 'k8sCluster') {
+    return (data.k8sClusters || []).map((cluster) => `<tr>
+      <td><strong>${cluster.id}</strong></td>
+      <td>${cluster.clusterName || '-'}</td>
+      <td>${cluster.clusterType || '-'}</td>
+      <td>${cluster.status || '-'}</td>
+      <td>${cluster.namespaces || 0}</td>
+      <td>${cluster.containers || 0}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-outline" style="padding:4px 8px" onclick="editPanoramaEntityPrompt('k8sCluster','${cluster.id}')">编辑</button>
+        <button class="btn btn-outline" style="padding:4px 8px;color:var(--red)" onclick="deletePanoramaEntity('k8sCluster','${cluster.id}')">删除</button>
+      </td>
+    </tr>`).join('');
+  }
+  if (entityType === 'k8sNamespace') {
+    return (data.k8sNamespaces || []).map((ns) => `<tr>
+      <td><strong>${ns.id}</strong></td>
+      <td>${ns.namespaceName || '-'}</td>
+      <td>${ns.clusterName || ns.clusterId || '-'}</td>
+      <td>${ns.env || '-'}</td>
+      <td>${ns.status || '-'}</td>
+      <td>${ns.containers || 0}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-outline" style="padding:4px 8px" onclick="editPanoramaEntityPrompt('k8sNamespace','${ns.id}')">编辑</button>
+        <button class="btn btn-outline" style="padding:4px 8px;color:var(--red)" onclick="deletePanoramaEntity('k8sNamespace','${ns.id}')">删除</button>
+      </td>
+    </tr>`).join('');
+  }
+  if (entityType === 'k8sContainer') {
+    return (data.k8sContainers || []).map((ct) => `<tr>
+      <td><strong>${ct.id}</strong></td>
+      <td>${ct.podName || '-'}</td>
+      <td>${ct.namespaceName || ct.namespaceId || '-'}</td>
+      <td>${ct.clusterName || ct.clusterId || '-'}</td>
+      <td>${ct.vmId || '-'}</td>
+      <td>${ct.status || '-'}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-outline" style="padding:4px 8px" onclick="editPanoramaEntityPrompt('k8sContainer','${ct.id}')">编辑</button>
+        <button class="btn btn-outline" style="padding:4px 8px;color:var(--red)" onclick="deletePanoramaEntity('k8sContainer','${ct.id}')">删除</button>
+      </td>
+    </tr>`).join('');
+  }
   if (entityType === 'techComponent') {
     return (data.techComponents || []).map((comp) => `<tr>
       <td><strong>${comp.id}</strong></td>
@@ -906,6 +991,9 @@ function renderPanoramaAdmin(c, b) {
     lbDomains: [],
     otelServices: [],
     otelInstances: [],
+    k8sClusters: [],
+    k8sNamespaces: [],
+    k8sContainers: [],
     techComponents: [],
     appTechRelations: [],
     artifacts: [],
@@ -925,6 +1013,9 @@ function renderPanoramaAdmin(c, b) {
     { key: 'lbDomain', label: `LB域名 (${data.lbDomains.length})` },
     { key: 'otelService', label: `OTel服务 (${data.otelServices.length})` },
     { key: 'otelInstance', label: `OTel实例 (${data.otelInstances.length})` },
+    { key: 'k8sCluster', label: `K8S集群 (${data.k8sClusters.length})` },
+    { key: 'k8sNamespace', label: `K8S命名空间 (${data.k8sNamespaces.length})` },
+    { key: 'k8sContainer', label: `K8S容器 (${data.k8sContainers.length})` },
     { key: 'techComponent', label: `技术组件 (${data.techComponents.length})` },
     { key: 'appTechRelation', label: `应用技术关系 (${data.appTechRelations.length})` },
     { key: 'artifact', label: `制品 (${data.artifacts.length})` },
@@ -954,6 +1045,12 @@ function renderPanoramaAdmin(c, b) {
                       ? '<tr><th>ID</th><th>服务名</th><th>应用ID</th><th>命名空间</th><th>版本</th><th>发现日期</th><th>操作</th></tr>'
                       : panoramaAdminEntity === 'otelInstance'
                         ? '<tr><th>ID</th><th>服务</th><th>应用</th><th>主机</th><th>Pod</th><th>状态</th><th>最后发现</th><th>操作</th></tr>'
+                        : panoramaAdminEntity === 'k8sCluster'
+                          ? '<tr><th>ID</th><th>集群名</th><th>类型</th><th>状态</th><th>命名空间数</th><th>容器数</th><th>操作</th></tr>'
+                          : panoramaAdminEntity === 'k8sNamespace'
+                            ? '<tr><th>ID</th><th>命名空间</th><th>所属集群</th><th>环境</th><th>状态</th><th>容器数</th><th>操作</th></tr>'
+                            : panoramaAdminEntity === 'k8sContainer'
+                              ? '<tr><th>ID</th><th>Pod</th><th>命名空间</th><th>集群</th><th>VM</th><th>状态</th><th>操作</th></tr>'
                         : panoramaAdminEntity === 'techComponent'
                           ? '<tr><th>ID</th><th>组件名</th><th>类别</th><th>生命周期</th><th>版本</th><th>供应商</th><th>状态</th><th>操作</th></tr>'
                           : panoramaAdminEntity === 'appTechRelation'

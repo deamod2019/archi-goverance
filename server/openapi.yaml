@@ -864,6 +864,137 @@ paths:
       responses:
         '200': { description: Delete result }
 
+  /api/v1/panorama/k8s-clusters:
+    get:
+      summary: List panorama K8S clusters
+      responses:
+        '200': { description: K8S cluster list }
+    post:
+      summary: Create panorama K8S cluster
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created K8S cluster }
+
+  /api/v1/panorama/k8s-clusters/{id}:
+    put:
+      summary: Update panorama K8S cluster
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated K8S cluster }
+    delete:
+      summary: Delete panorama K8S cluster
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Delete result }
+
+  /api/v1/panorama/k8s-namespaces:
+    get:
+      summary: List panorama K8S namespaces
+      parameters:
+        - in: query
+          name: cluster_id
+          schema: { type: string }
+      responses:
+        '200': { description: K8S namespace list }
+    post:
+      summary: Create panorama K8S namespace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created K8S namespace }
+
+  /api/v1/panorama/k8s-namespaces/{id}:
+    put:
+      summary: Update panorama K8S namespace
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated K8S namespace }
+    delete:
+      summary: Delete panorama K8S namespace
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Delete result }
+
+  /api/v1/panorama/containers:
+    get:
+      summary: List panorama K8S containers
+      parameters:
+        - in: query
+          name: namespace_id
+          schema: { type: string }
+        - in: query
+          name: vm_id
+          schema: { type: string }
+      responses:
+        '200': { description: Container list }
+    post:
+      summary: Create panorama container
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created container }
+
+  /api/v1/panorama/containers/{id}:
+    put:
+      summary: Update panorama container
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated container }
+    delete:
+      summary: Delete panorama container
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Delete result }
+
   /api/v1/panorama/artifacts:
     get:
       summary: List panorama artifacts

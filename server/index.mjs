@@ -2121,6 +2121,89 @@ function normalizeAppTechRelationInput(raw) {
   };
 }
 
+function normalizeK8sClusterInput(raw, fallbackId) {
+  const id = String(raw?.id || raw?.clusterId || fallbackId || '').trim();
+  const clusterName = String(raw?.clusterName || raw?.name || '').trim();
+  const clusterType = String(raw?.clusterType || 'PROD').trim().toUpperCase();
+  const region = String(raw?.region || '').trim();
+  const status = String(raw?.status || 'ACTIVE').trim().toUpperCase();
+  if (!id) throw new HttpError(400, 'k8s cluster id is required');
+  if (!clusterName) throw new HttpError(400, 'k8s cluster clusterName is required');
+  if (!['PROD', 'STAGE', 'DEV', 'DR'].includes(clusterType)) {
+    throw new HttpError(400, 'k8s cluster clusterType must be one of: PROD, STAGE, DEV, DR');
+  }
+  if (!['ACTIVE', 'INACTIVE'].includes(status)) {
+    throw new HttpError(400, 'k8s cluster status must be one of: ACTIVE, INACTIVE');
+  }
+  return {
+    id,
+    payload: {
+      clusterId: id,
+      clusterName,
+      clusterType,
+      region,
+      status
+    }
+  };
+}
+
+function normalizeK8sNamespaceInput(raw, fallbackId) {
+  const id = String(raw?.id || raw?.namespaceId || fallbackId || '').trim();
+  const clusterId = String(raw?.clusterId || raw?.cluster_id || '').trim();
+  const namespaceName = String(raw?.namespaceName || raw?.name || '').trim();
+  const env = String(raw?.env || 'PROD').trim().toUpperCase();
+  const status = String(raw?.status || 'ACTIVE').trim().toUpperCase();
+  if (!id) throw new HttpError(400, 'k8s namespace id is required');
+  if (!clusterId) throw new HttpError(400, 'k8s namespace clusterId is required');
+  if (!namespaceName) throw new HttpError(400, 'k8s namespace namespaceName is required');
+  if (!['PROD', 'STAGE', 'DEV', 'TEST'].includes(env)) {
+    throw new HttpError(400, 'k8s namespace env must be one of: PROD, STAGE, DEV, TEST');
+  }
+  if (!['ACTIVE', 'INACTIVE'].includes(status)) {
+    throw new HttpError(400, 'k8s namespace status must be one of: ACTIVE, INACTIVE');
+  }
+  return {
+    id,
+    clusterId,
+    payload: {
+      namespaceId: id,
+      clusterId,
+      namespaceName,
+      env,
+      status
+    }
+  };
+}
+
+function normalizeContainerInput(raw, fallbackId) {
+  const id = String(raw?.id || raw?.containerId || fallbackId || '').trim();
+  const namespaceId = String(raw?.namespaceId || raw?.namespace_id || '').trim();
+  const vmIdRaw = raw?.vmId == null ? '' : String(raw.vmId).trim();
+  const podName = String(raw?.podName || '').trim();
+  const status = String(raw?.status || 'RUNNING').trim().toUpperCase();
+  const image = String(raw?.image || '').trim();
+  if (!id) throw new HttpError(400, 'container id is required');
+  if (!namespaceId) throw new HttpError(400, 'container namespaceId is required');
+  if (!podName) throw new HttpError(400, 'container podName is required');
+  if (!['RUNNING', 'OFFLINE', 'CRASHLOOP', 'PENDING', 'UNKNOWN'].includes(status)) {
+    throw new HttpError(400, 'container status must be one of: RUNNING, OFFLINE, CRASHLOOP, PENDING, UNKNOWN');
+  }
+  const vmId = vmIdRaw || null;
+  return {
+    id,
+    namespaceId,
+    vmId,
+    payload: {
+      containerId: id,
+      namespaceId,
+      vmId,
+      podName,
+      status,
+      image
+    }
+  };
+}
+
 async function resolveDependencyNodePayload(client, nodeId) {
   const existing = await client.query('SELECT payload FROM dependency_nodes WHERE id = $1', [nodeId]);
   if (existing.rows.length) {
@@ -4906,6 +4989,301 @@ async function handleApi(req, res, url) {
       return true;
     }
     sendJson(res, 200, { id: relationId, deleted: true });
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/k8s-clusters') {
+    const { rows } = await pool.query(
+      `
+      SELECT
+        kc.id,
+        kc.payload,
+        (SELECT COUNT(*)::int FROM k8s_namespaces ns WHERE ns.cluster_id = kc.id) AS namespaces,
+        (
+          SELECT COUNT(*)::int
+          FROM containers ct
+          JOIN k8s_namespaces ns ON ns.id = ct.namespace_id
+          WHERE ns.cluster_id = kc.id
+        ) AS containers
+      FROM k8s_clusters kc
+      ORDER BY kc.id
+      `
+    );
+    sendJson(
+      res,
+      200,
+      rows.map((row) => ({
+        ...row.payload,
+        id: row.id,
+        clusterId: row.payload?.clusterId || row.id,
+        namespaces: row.namespaces || 0,
+        containers: row.containers || 0
+      }))
+    );
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/panorama/k8s-clusters') {
+    const body = await readJsonBody(req);
+    const cluster = normalizeK8sClusterInput(body);
+    try {
+      await pool.query('INSERT INTO k8s_clusters (id, payload) VALUES ($1, $2::jsonb)', [cluster.id, JSON.stringify(cluster.payload)]);
+    } catch (error) {
+      if (String(error.code) === '23505') throw new HttpError(409, `k8s cluster '${cluster.id}' already exists`);
+      throw error;
+    }
+    sendJson(res, 201, { id: cluster.id, ...cluster.payload });
+    return true;
+  }
+
+  const k8sClusterItemMatch = url.pathname.match(/^\/api\/v1\/panorama\/k8s-clusters\/([^/]+)$/);
+  if (req.method === 'PUT' && k8sClusterItemMatch) {
+    const clusterId = decodeURIComponent(k8sClusterItemMatch[1]);
+    const body = await readJsonBody(req);
+    const current = await pool.query('SELECT payload FROM k8s_clusters WHERE id = $1', [clusterId]);
+    if (!current.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'k8s cluster not found' });
+      return true;
+    }
+    const merged = { ...current.rows[0].payload, ...body, id: clusterId, clusterId };
+    const cluster = normalizeK8sClusterInput(merged, clusterId);
+    await pool.query('UPDATE k8s_clusters SET payload = $2::jsonb, updated_at = now() WHERE id = $1', [clusterId, JSON.stringify(cluster.payload)]);
+    sendJson(res, 200, { id: clusterId, ...cluster.payload });
+    return true;
+  }
+
+  if (req.method === 'DELETE' && k8sClusterItemMatch) {
+    const clusterId = decodeURIComponent(k8sClusterItemMatch[1]);
+    const summaryRes = await pool.query(
+      `
+      SELECT
+        (SELECT COUNT(*)::int FROM k8s_namespaces WHERE cluster_id = $1) AS namespaces,
+        (
+          SELECT COUNT(*)::int
+          FROM containers ct
+          JOIN k8s_namespaces ns ON ns.id = ct.namespace_id
+          WHERE ns.cluster_id = $1
+        ) AS containers
+      `,
+      [clusterId]
+    );
+    const deleted = await pool.query('DELETE FROM k8s_clusters WHERE id = $1 RETURNING id', [clusterId]);
+    if (!deleted.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'k8s cluster not found' });
+      return true;
+    }
+    sendJson(res, 200, { id: clusterId, deleted: true, cascade: summaryRes.rows[0] || {} });
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/k8s-namespaces') {
+    const clusterId = url.searchParams.get('cluster_id');
+    const params = [];
+    let sql = `
+      SELECT
+        ns.id,
+        ns.cluster_id,
+        ns.payload,
+        kc.payload AS cluster_payload,
+        (SELECT COUNT(*)::int FROM containers ct WHERE ct.namespace_id = ns.id) AS containers
+      FROM k8s_namespaces ns
+      JOIN k8s_clusters kc ON kc.id = ns.cluster_id
+    `;
+    if (clusterId) {
+      params.push(clusterId);
+      sql += ` WHERE ns.cluster_id = $${params.length}`;
+    }
+    sql += ' ORDER BY ns.id';
+    const { rows } = await pool.query(sql, params);
+    sendJson(
+      res,
+      200,
+      rows.map((row) => ({
+        ...row.payload,
+        id: row.id,
+        namespaceId: row.payload?.namespaceId || row.id,
+        clusterId: row.cluster_id,
+        clusterName: row.cluster_payload?.clusterName || row.cluster_id,
+        containers: row.containers || 0
+      }))
+    );
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/panorama/k8s-namespaces') {
+    const body = await readJsonBody(req);
+    const namespace = normalizeK8sNamespaceInput(body);
+    const clusterRes = await pool.query('SELECT 1 FROM k8s_clusters WHERE id = $1', [namespace.clusterId]);
+    if (!clusterRes.rows.length) throw new HttpError(400, `k8s cluster '${namespace.clusterId}' does not exist`);
+    try {
+      await pool.query('INSERT INTO k8s_namespaces (id, cluster_id, payload) VALUES ($1, $2, $3::jsonb)', [
+        namespace.id,
+        namespace.clusterId,
+        JSON.stringify(namespace.payload)
+      ]);
+    } catch (error) {
+      if (String(error.code) === '23505') throw new HttpError(409, `k8s namespace '${namespace.id}' already exists`);
+      throw error;
+    }
+    sendJson(res, 201, { id: namespace.id, ...namespace.payload });
+    return true;
+  }
+
+  const k8sNamespaceItemMatch = url.pathname.match(/^\/api\/v1\/panorama\/k8s-namespaces\/([^/]+)$/);
+  if (req.method === 'PUT' && k8sNamespaceItemMatch) {
+    const namespaceId = decodeURIComponent(k8sNamespaceItemMatch[1]);
+    const body = await readJsonBody(req);
+    const current = await pool.query('SELECT cluster_id, payload FROM k8s_namespaces WHERE id = $1', [namespaceId]);
+    if (!current.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'k8s namespace not found' });
+      return true;
+    }
+    const merged = {
+      ...current.rows[0].payload,
+      ...body,
+      id: namespaceId,
+      namespaceId,
+      clusterId: body?.clusterId != null ? body.clusterId : current.rows[0].cluster_id
+    };
+    const namespace = normalizeK8sNamespaceInput(merged, namespaceId);
+    const clusterRes = await pool.query('SELECT 1 FROM k8s_clusters WHERE id = $1', [namespace.clusterId]);
+    if (!clusterRes.rows.length) throw new HttpError(400, `k8s cluster '${namespace.clusterId}' does not exist`);
+    await pool.query('UPDATE k8s_namespaces SET cluster_id = $2, payload = $3::jsonb, updated_at = now() WHERE id = $1', [
+      namespaceId,
+      namespace.clusterId,
+      JSON.stringify(namespace.payload)
+    ]);
+    sendJson(res, 200, { id: namespaceId, ...namespace.payload });
+    return true;
+  }
+
+  if (req.method === 'DELETE' && k8sNamespaceItemMatch) {
+    const namespaceId = decodeURIComponent(k8sNamespaceItemMatch[1]);
+    const summaryRes = await pool.query('SELECT COUNT(*)::int AS containers FROM containers WHERE namespace_id = $1', [namespaceId]);
+    const deleted = await pool.query('DELETE FROM k8s_namespaces WHERE id = $1 RETURNING id', [namespaceId]);
+    if (!deleted.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'k8s namespace not found' });
+      return true;
+    }
+    sendJson(res, 200, { id: namespaceId, deleted: true, cascade: summaryRes.rows[0] || {} });
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/containers') {
+    const namespaceId = url.searchParams.get('namespace_id');
+    const vmId = url.searchParams.get('vm_id');
+    const params = [];
+    const conditions = [];
+    let sql = `
+      SELECT
+        ct.id,
+        ct.namespace_id,
+        ct.vm_id,
+        ct.payload,
+        ns.payload AS namespace_payload,
+        ns.cluster_id,
+        kc.payload AS cluster_payload,
+        vm.payload AS vm_payload
+      FROM containers ct
+      JOIN k8s_namespaces ns ON ns.id = ct.namespace_id
+      JOIN k8s_clusters kc ON kc.id = ns.cluster_id
+      LEFT JOIN virtual_machines vm ON vm.id = ct.vm_id
+    `;
+    if (namespaceId) {
+      params.push(namespaceId);
+      conditions.push(`ct.namespace_id = $${params.length}`);
+    }
+    if (vmId) {
+      params.push(vmId);
+      conditions.push(`ct.vm_id = $${params.length}`);
+    }
+    if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
+    sql += ' ORDER BY ct.id';
+    const { rows } = await pool.query(sql, params);
+    sendJson(
+      res,
+      200,
+      rows.map((row) => ({
+        ...row.payload,
+        id: row.id,
+        containerId: row.payload?.containerId || row.id,
+        namespaceId: row.namespace_id,
+        namespaceName: row.namespace_payload?.namespaceName || row.namespace_id,
+        clusterId: row.cluster_id,
+        clusterName: row.cluster_payload?.clusterName || row.cluster_id,
+        vmId: row.vm_id || null,
+        vmIp: row.vm_payload?.ipAddress || null
+      }))
+    );
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/panorama/containers') {
+    const body = await readJsonBody(req);
+    const container = normalizeContainerInput(body);
+    const nsRes = await pool.query('SELECT 1 FROM k8s_namespaces WHERE id = $1', [container.namespaceId]);
+    if (!nsRes.rows.length) throw new HttpError(400, `k8s namespace '${container.namespaceId}' does not exist`);
+    if (container.vmId) {
+      const vmRes = await pool.query('SELECT 1 FROM virtual_machines WHERE id = $1', [container.vmId]);
+      if (!vmRes.rows.length) throw new HttpError(400, `virtual machine '${container.vmId}' does not exist`);
+    }
+    try {
+      await pool.query('INSERT INTO containers (id, namespace_id, vm_id, payload) VALUES ($1, $2, $3, $4::jsonb)', [
+        container.id,
+        container.namespaceId,
+        container.vmId,
+        JSON.stringify(container.payload)
+      ]);
+    } catch (error) {
+      if (String(error.code) === '23505') throw new HttpError(409, `container '${container.id}' already exists`);
+      throw error;
+    }
+    sendJson(res, 201, { id: container.id, ...container.payload });
+    return true;
+  }
+
+  const containerItemMatch = url.pathname.match(/^\/api\/v1\/panorama\/containers\/([^/]+)$/);
+  if (req.method === 'PUT' && containerItemMatch) {
+    const containerId = decodeURIComponent(containerItemMatch[1]);
+    const body = await readJsonBody(req);
+    const current = await pool.query('SELECT namespace_id, vm_id, payload FROM containers WHERE id = $1', [containerId]);
+    if (!current.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'container not found' });
+      return true;
+    }
+    const merged = {
+      ...current.rows[0].payload,
+      ...body,
+      id: containerId,
+      containerId,
+      namespaceId: body?.namespaceId != null ? body.namespaceId : current.rows[0].namespace_id,
+      vmId: body?.vmId != null ? body.vmId : current.rows[0].vm_id
+    };
+    const container = normalizeContainerInput(merged, containerId);
+    const nsRes = await pool.query('SELECT 1 FROM k8s_namespaces WHERE id = $1', [container.namespaceId]);
+    if (!nsRes.rows.length) throw new HttpError(400, `k8s namespace '${container.namespaceId}' does not exist`);
+    if (container.vmId) {
+      const vmRes = await pool.query('SELECT 1 FROM virtual_machines WHERE id = $1', [container.vmId]);
+      if (!vmRes.rows.length) throw new HttpError(400, `virtual machine '${container.vmId}' does not exist`);
+    }
+    await pool.query('UPDATE containers SET namespace_id = $2, vm_id = $3, payload = $4::jsonb, updated_at = now() WHERE id = $1', [
+      containerId,
+      container.namespaceId,
+      container.vmId,
+      JSON.stringify(container.payload)
+    ]);
+    sendJson(res, 200, { id: containerId, ...container.payload });
+    return true;
+  }
+
+  if (req.method === 'DELETE' && containerItemMatch) {
+    const containerId = decodeURIComponent(containerItemMatch[1]);
+    const deleted = await pool.query('DELETE FROM containers WHERE id = $1 RETURNING id', [containerId]);
+    if (!deleted.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'container not found' });
+      return true;
+    }
+    sendJson(res, 200, { id: containerId, deleted: true });
     return true;
   }
 
