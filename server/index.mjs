@@ -1276,8 +1276,8 @@ async function ensureSeedData() {
   }
 }
 
-async function loadSectionsPayload() {
-  const { rows } = await pool.query('SELECT section, payload FROM mock_sections');
+async function loadSectionsPayload(queryable = pool) {
+  const { rows } = await queryable.query('SELECT section, payload FROM mock_sections');
   const payload = {};
   for (const row of rows) {
     payload[row.section] = row.payload;
@@ -1290,12 +1290,270 @@ async function loadSectionsPayload() {
   return payload;
 }
 
-async function loadSectionPayload(section) {
-  const { rows } = await pool.query('SELECT payload FROM mock_sections WHERE section = $1', [section]);
+async function loadSectionPayload(section, queryable = pool) {
+  const { rows } = await queryable.query('SELECT payload FROM mock_sections WHERE section = $1', [section]);
   if (!rows.length) {
     throw new Error(`Section '${section}' not found in database`);
   }
   return rows[0].payload;
+}
+
+async function upsertMockSection(client, section, payload) {
+  await client.query(
+    `
+    INSERT INTO mock_sections (section, payload, updated_at)
+    VALUES ($1, $2::jsonb, now())
+    ON CONFLICT (section)
+    DO UPDATE SET payload = EXCLUDED.payload, updated_at = now()
+    `,
+    [section, JSON.stringify(payload)]
+  );
+}
+
+async function withTransaction(work) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const output = await work(client);
+    await client.query('COMMIT');
+    return output;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function normalizeRuleInput(raw, fallbackId) {
+  const ruleId = String(raw?.id || fallbackId || '').trim();
+  const name = String(raw?.name || '').trim();
+  const level = String(raw?.level || '').trim().toUpperCase();
+  const checkMethod = String(raw?.checkMethod || '').trim();
+  const description = String(raw?.description || '').trim();
+  const checkScript = raw?.checkScript == null ? '' : String(raw.checkScript);
+
+  if (!ruleId) throw new HttpError(400, 'rule.id is required');
+  if (!name) throw new HttpError(400, 'rule.name is required');
+  if (!['CRITICAL', 'MAJOR', 'MINOR'].includes(level)) {
+    throw new HttpError(400, "rule.level must be one of: CRITICAL, MAJOR, MINOR");
+  }
+  if (!['评审', '测试', '巡检'].includes(checkMethod)) {
+    throw new HttpError(400, "rule.checkMethod must be one of: 评审, 测试, 巡检");
+  }
+  if (!description) throw new HttpError(400, 'rule.description is required');
+  return {
+    id: ruleId,
+    name,
+    level,
+    checkMethod,
+    description,
+    checkScript
+  };
+}
+
+function normalizeStandardInput(raw, fallbackId) {
+  const standardId = String(raw?.id || fallbackId || '').trim();
+  const name = String(raw?.name || '').trim();
+  const code = String(raw?.code || '').trim();
+  const category = String(raw?.category || '').trim();
+  const version = String(raw?.version || '').trim();
+  const status = String(raw?.status || '').trim().toUpperCase();
+  const owner = String(raw?.owner || '').trim();
+  const approver = String(raw?.approver || '').trim();
+  const description = String(raw?.description || '').trim();
+  const icon = String(raw?.icon || '').trim();
+  const publishDate = String(raw?.publishDate || '').trim();
+  const effectiveDate = String(raw?.effectiveDate || '').trim();
+  const chapters = Array.isArray(raw?.chapters) ? raw.chapters : [];
+  const rules = Array.isArray(raw?.rules) ? raw.rules : [];
+
+  if (!standardId) throw new HttpError(400, 'standard.id is required');
+  if (!name) throw new HttpError(400, 'standard.name is required');
+  if (!code) throw new HttpError(400, 'standard.code is required');
+  if (!category) throw new HttpError(400, 'standard.category is required');
+  if (!version) throw new HttpError(400, 'standard.version is required');
+  if (!['EFFECTIVE', 'DRAFT'].includes(status)) {
+    throw new HttpError(400, "standard.status must be one of: EFFECTIVE, DRAFT");
+  }
+  if (!owner) throw new HttpError(400, 'standard.owner is required');
+  if (!approver) throw new HttpError(400, 'standard.approver is required');
+  if (!description) throw new HttpError(400, 'standard.description is required');
+  if (!icon) throw new HttpError(400, 'standard.icon is required');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(publishDate)) throw new HttpError(400, 'standard.publishDate must be YYYY-MM-DD');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveDate)) throw new HttpError(400, 'standard.effectiveDate must be YYYY-MM-DD');
+
+  const normalizedChapters = chapters.map((chapter, idx) => {
+    const title = String(chapter?.title || '').trim();
+    const content = String(chapter?.content || '').trim();
+    if (!title) throw new HttpError(400, `standard.chapters[${idx}].title is required`);
+    if (!content) throw new HttpError(400, `standard.chapters[${idx}].content is required`);
+    return { title, content };
+  });
+
+  const normalizedRules = rules.map((rule, idx) => normalizeRuleInput(rule, `R-${idx + 1}`));
+  return {
+    id: standardId,
+    name,
+    code,
+    category,
+    version,
+    status,
+    owner,
+    approver,
+    description,
+    icon,
+    publishDate,
+    effectiveDate,
+    chapters: normalizedChapters,
+    rules: normalizedRules
+  };
+}
+
+function buildRuleStdMap(standards) {
+  const out = {};
+  for (const standard of standards) {
+    for (const rule of standard.rules || []) {
+      out[rule.id] = {
+        stdId: standard.id,
+        stdName: standard.name,
+        rule
+      };
+    }
+  }
+  return out;
+}
+
+function listUniqueRulesByFirstSeen(standards) {
+  const out = [];
+  const seen = new Set();
+  for (const standard of standards) {
+    for (const rule of standard.rules || []) {
+      if (seen.has(rule.id)) continue;
+      seen.add(rule.id);
+      out.push({
+        ruleId: rule.id,
+        payload: {
+          ...rule,
+          stdId: standard.id,
+          stdName: standard.name
+        }
+      });
+    }
+  }
+  return out;
+}
+
+async function persistStandardsState(client, standards) {
+  const ruleMap = buildRuleStdMap(standards);
+  await upsertMockSection(client, 'ARCH_STANDARDS', standards);
+  await upsertMockSection(client, 'RULE_STD_MAP', ruleMap);
+
+  const uniqueRules = listUniqueRulesByFirstSeen(standards);
+  await client.query('DELETE FROM compliance_rules');
+  for (const item of uniqueRules) {
+    await client.query(
+      'INSERT INTO compliance_rules (rule_id, payload, updated_at) VALUES ($1, $2::jsonb, now())',
+      [item.ruleId, JSON.stringify(item.payload)]
+    );
+  }
+}
+
+function normalizeTechComponentInput(raw, fallbackId) {
+  const id = String(raw?.id || raw?.componentId || fallbackId || '').trim();
+  const productName = String(raw?.productName || raw?.name || '').trim();
+  const category = String(raw?.category || '').trim();
+  const lifecycle = String(raw?.lifecycle || '').trim().toUpperCase();
+  const version = String(raw?.version || '').trim();
+  const vendor = String(raw?.vendor || '').trim();
+  const status = raw?.status == null ? 'ACTIVE' : String(raw.status).trim().toUpperCase();
+  const owners = Array.isArray(raw?.owners)
+    ? raw.owners.map((x) => String(x).trim()).filter(Boolean)
+    : [];
+  const tags = Array.isArray(raw?.tags)
+    ? raw.tags.map((x) => String(x).trim()).filter(Boolean)
+    : [];
+
+  if (!id) throw new HttpError(400, 'tech component id is required');
+  if (!productName) throw new HttpError(400, 'tech component productName is required');
+  if (!category) throw new HttpError(400, 'tech component category is required');
+  if (!['RECOMMENDED', 'ALLOWED', 'DEPRECATED', 'FORBIDDEN'].includes(lifecycle)) {
+    throw new HttpError(400, 'tech component lifecycle must be one of: RECOMMENDED, ALLOWED, DEPRECATED, FORBIDDEN');
+  }
+  if (!version) throw new HttpError(400, 'tech component version is required');
+  if (!vendor) throw new HttpError(400, 'tech component vendor is required');
+  if (!['ACTIVE', 'INACTIVE'].includes(status)) {
+    throw new HttpError(400, 'tech component status must be one of: ACTIVE, INACTIVE');
+  }
+
+  return {
+    id,
+    productName,
+    category,
+    lifecycle,
+    version,
+    vendor,
+    status,
+    owners,
+    tags
+  };
+}
+
+function normalizeAppProfilePatch(raw) {
+  const allowed = new Set(['name', 'type', 'status', 'owner', 'gitRepo', 'tags', 'classification', 'securityLevel', 'dataLevel']);
+  const updates = {};
+  for (const [key, value] of Object.entries(raw || {})) {
+    if (!allowed.has(key)) {
+      throw new HttpError(400, `unsupported profile field '${key}'`);
+    }
+    updates[key] = value;
+  }
+
+  if (!Object.keys(updates).length) {
+    throw new HttpError(400, 'no profile fields to update');
+  }
+
+  if (updates.name !== undefined) {
+    updates.name = String(updates.name).trim();
+    if (!updates.name) throw new HttpError(400, 'name cannot be empty');
+  }
+  if (updates.type !== undefined) {
+    updates.type = String(updates.type).trim().toUpperCase();
+    if (!['MICROSERVICE', 'MONOLITH', 'SPA', 'BATCH'].includes(updates.type)) {
+      throw new HttpError(400, 'type must be one of: MICROSERVICE, MONOLITH, SPA, BATCH');
+    }
+  }
+  if (updates.status !== undefined) {
+    updates.status = String(updates.status).trim().toUpperCase();
+    if (!['RUNNING', 'BUILDING', 'PLANNING', 'OFFLINE', 'RETIRED'].includes(updates.status)) {
+      throw new HttpError(400, 'status must be one of: RUNNING, BUILDING, PLANNING, OFFLINE, RETIRED');
+    }
+  }
+  if (updates.owner !== undefined) {
+    updates.owner = String(updates.owner).trim();
+    if (!updates.owner) throw new HttpError(400, 'owner cannot be empty');
+  }
+  if (updates.gitRepo !== undefined) {
+    updates.gitRepo = String(updates.gitRepo).trim();
+  }
+  if (updates.tags !== undefined) {
+    if (!Array.isArray(updates.tags)) throw new HttpError(400, 'tags must be an array');
+    updates.tags = updates.tags.map((x) => String(x).trim()).filter(Boolean);
+  }
+  if (updates.classification !== undefined) {
+    updates.classification = String(updates.classification).trim().toUpperCase();
+    if (!['A', 'B', 'C'].includes(updates.classification)) throw new HttpError(400, 'classification must be one of: A, B, C');
+  }
+  if (updates.securityLevel !== undefined) {
+    updates.securityLevel = String(updates.securityLevel).trim().toUpperCase();
+    if (!['S1', 'S2', 'S3'].includes(updates.securityLevel)) throw new HttpError(400, 'securityLevel must be one of: S1, S2, S3');
+  }
+  if (updates.dataLevel !== undefined) {
+    updates.dataLevel = String(updates.dataLevel).trim().toUpperCase();
+    if (!['L1', 'L2', 'L3'].includes(updates.dataLevel)) throw new HttpError(400, 'dataLevel must be one of: L1, L2, L3');
+  }
+
+  return updates;
 }
 
 function parseCsv(rawValue) {
@@ -1858,6 +2116,28 @@ async function handleApi(req, res, url) {
     return true;
   }
 
+  if (req.method === 'PATCH' && appProfileMatch) {
+    const appId = decodeURIComponent(appProfileMatch[1]);
+    const body = await readJsonBody(req);
+    const patch = normalizeAppProfilePatch(body);
+    const updateResult = await pool.query(
+      `
+      UPDATE applications
+      SET payload = payload || $2::jsonb,
+          updated_at = now()
+      WHERE id = $1
+      RETURNING payload
+      `,
+      [appId, JSON.stringify(patch)]
+    );
+    if (!updateResult.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'application not found' });
+      return true;
+    }
+    sendJson(res, 200, { id: appId, profile: updateResult.rows[0].payload });
+    return true;
+  }
+
   const appArtifactsMatch = url.pathname.match(/^\/api\/v1\/panorama\/applications\/([^/]+)\/artifacts$/);
   if (req.method === 'GET' && appArtifactsMatch) {
     const appId = decodeURIComponent(appArtifactsMatch[1]);
@@ -2207,6 +2487,179 @@ async function handleApi(req, res, url) {
     return true;
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/v1/tech-components') {
+    const category = url.searchParams.get('category');
+    const lifecycle = url.searchParams.get('lifecycle');
+    const status = url.searchParams.get('status');
+    const projection = (url.searchParams.get('projection') || 'full').trim() || 'full';
+    const fields = parseCsv(url.searchParams.get('fields'));
+    const { rows } = await pool.query('SELECT payload FROM tech_components ORDER BY payload->>\'productName\'');
+    let components = rows.map((row) => row.payload);
+    if (category) {
+      components = components.filter((x) => String(x.category).toUpperCase() === String(category).toUpperCase());
+    }
+    if (lifecycle) {
+      components = components.filter((x) => String(x.lifecycle).toUpperCase() === String(lifecycle).toUpperCase());
+    }
+    if (status) {
+      components = components.filter((x) => String(x.status || 'ACTIVE').toUpperCase() === String(status).toUpperCase());
+    }
+    if (projection === 'summary') {
+      components = components.map((x) =>
+        projectObject(x, ['id', 'productName', 'category', 'lifecycle', 'version', 'status', 'vendor'])
+      );
+    } else if (projection !== 'full') {
+      throw new HttpError(400, `unsupported projection '${projection}'`);
+    }
+    sendJson(res, 200, projectData(components, fields));
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/tech-components') {
+    const body = await readJsonBody(req);
+    const component = normalizeTechComponentInput(body);
+    try {
+      await pool.query('INSERT INTO tech_components (id, payload) VALUES ($1, $2::jsonb)', [component.id, JSON.stringify(component)]);
+    } catch (error) {
+      if (String(error.code) === '23505') {
+        throw new HttpError(409, `tech component '${component.id}' already exists`);
+      }
+      throw error;
+    }
+    sendJson(res, 201, component);
+    return true;
+  }
+
+  const techComponentMatch = url.pathname.match(/^\/api\/v1\/tech-components\/([^/]+)$/);
+  if (req.method === 'PUT' && techComponentMatch) {
+    const componentId = decodeURIComponent(techComponentMatch[1]);
+    const body = await readJsonBody(req);
+    const current = await pool.query('SELECT payload FROM tech_components WHERE id = $1', [componentId]);
+    if (!current.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'tech component not found' });
+      return true;
+    }
+    const merged = { ...current.rows[0].payload, ...body, id: componentId };
+    const component = normalizeTechComponentInput(merged, componentId);
+    await pool.query('UPDATE tech_components SET payload = $2::jsonb, updated_at = now() WHERE id = $1', [componentId, JSON.stringify(component)]);
+    sendJson(res, 200, component);
+    return true;
+  }
+
+  if (req.method === 'DELETE' && techComponentMatch) {
+    const componentId = decodeURIComponent(techComponentMatch[1]);
+    const deleted = await pool.query('DELETE FROM tech_components WHERE id = $1 RETURNING id', [componentId]);
+    if (!deleted.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'tech component not found' });
+      return true;
+    }
+    sendJson(res, 200, { id: componentId, deleted: true });
+    return true;
+  }
+
+  const appTechAdminMatch = url.pathname.match(/^\/api\/v1\/applications\/([^/]+)\/tech-components$/);
+  if (req.method === 'GET' && appTechAdminMatch) {
+    const appId = decodeURIComponent(appTechAdminMatch[1]);
+    const appCheck = await pool.query('SELECT id FROM applications WHERE id = $1', [appId]);
+    if (!appCheck.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'application not found' });
+      return true;
+    }
+    const { rows } = await pool.query(
+      `
+      SELECT tc.payload AS component_payload, rel.payload AS rel_payload
+      FROM app_tech_rel rel
+      JOIN tech_components tc ON tc.id = rel.component_id
+      WHERE rel.app_id = $1
+      ORDER BY rel.id
+      `,
+      [appId]
+    );
+    sendJson(res, 200, rows.map((row) => ({ ...row.component_payload, relation: row.rel_payload })));
+    return true;
+  }
+
+  if (req.method === 'POST' && appTechAdminMatch) {
+    const appId = decodeURIComponent(appTechAdminMatch[1]);
+    const body = await readJsonBody(req);
+    const componentId = String(body.componentId || '').trim();
+    if (!componentId) {
+      throw new HttpError(400, 'componentId is required');
+    }
+    const relationPatch = body.relation && typeof body.relation === 'object' ? body.relation : {};
+
+    const result = await withTransaction(async (client) => {
+      const [appRes, compRes] = await Promise.all([
+        client.query('SELECT id FROM applications WHERE id = $1', [appId]),
+        client.query('SELECT payload FROM tech_components WHERE id = $1', [componentId])
+      ]);
+      if (!appRes.rows.length) throw new HttpError(404, 'application not found');
+      if (!compRes.rows.length) throw new HttpError(404, 'tech component not found');
+
+      const relRes = await client.query(
+        'SELECT id, payload FROM app_tech_rel WHERE app_id = $1 AND component_id = $2 ORDER BY id LIMIT 1',
+        [appId, componentId]
+      );
+      const nextRelation = {
+        appId,
+        componentId,
+        ...((relRes.rows[0] && relRes.rows[0].payload) || {}),
+        ...relationPatch,
+        updatedAt: new Date().toISOString()
+      };
+      if (relRes.rows.length) {
+        await client.query('UPDATE app_tech_rel SET payload = $2::jsonb WHERE id = $1', [relRes.rows[0].id, JSON.stringify(nextRelation)]);
+      } else {
+        await client.query('INSERT INTO app_tech_rel (app_id, component_id, payload) VALUES ($1, $2, $3::jsonb)', [appId, componentId, JSON.stringify(nextRelation)]);
+      }
+      return { component: compRes.rows[0].payload, relation: nextRelation };
+    });
+    sendJson(res, 200, result);
+    return true;
+  }
+
+  const appTechItemMatch = url.pathname.match(/^\/api\/v1\/applications\/([^/]+)\/tech-components\/([^/]+)$/);
+  if (req.method === 'PUT' && appTechItemMatch) {
+    const appId = decodeURIComponent(appTechItemMatch[1]);
+    const componentId = decodeURIComponent(appTechItemMatch[2]);
+    const body = await readJsonBody(req);
+    const relationPatch = body.relation && typeof body.relation === 'object' ? body.relation : body;
+    if (!relationPatch || typeof relationPatch !== 'object') {
+      throw new HttpError(400, 'relation payload must be an object');
+    }
+
+    const result = await withTransaction(async (client) => {
+      const relRes = await client.query(
+        'SELECT id, payload FROM app_tech_rel WHERE app_id = $1 AND component_id = $2 ORDER BY id LIMIT 1',
+        [appId, componentId]
+      );
+      if (!relRes.rows.length) throw new HttpError(404, 'app-tech relation not found');
+      const nextRelation = {
+        ...relRes.rows[0].payload,
+        ...relationPatch,
+        appId,
+        componentId,
+        updatedAt: new Date().toISOString()
+      };
+      await client.query('UPDATE app_tech_rel SET payload = $2::jsonb WHERE id = $1', [relRes.rows[0].id, JSON.stringify(nextRelation)]);
+      return nextRelation;
+    });
+    sendJson(res, 200, result);
+    return true;
+  }
+
+  if (req.method === 'DELETE' && appTechItemMatch) {
+    const appId = decodeURIComponent(appTechItemMatch[1]);
+    const componentId = decodeURIComponent(appTechItemMatch[2]);
+    const deleted = await pool.query('DELETE FROM app_tech_rel WHERE app_id = $1 AND component_id = $2 RETURNING id', [appId, componentId]);
+    if (!deleted.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'app-tech relation not found' });
+      return true;
+    }
+    sendJson(res, 200, { appId, componentId, deleted: true });
+    return true;
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/v1/capabilities') {
     const domainId = url.searchParams.get('domain_id');
     const params = [];
@@ -2514,6 +2967,22 @@ async function handleApi(req, res, url) {
     return true;
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/v1/standards') {
+    const body = await readJsonBody(req);
+    const standard = normalizeStandardInput(body);
+    const saved = await withTransaction(async (client) => {
+      const standards = (await loadSectionPayload('ARCH_STANDARDS', client)) || [];
+      if (standards.some((x) => x.id === standard.id)) {
+        throw new HttpError(409, `standard '${standard.id}' already exists`);
+      }
+      const next = [...standards, standard];
+      await persistStandardsState(client, next);
+      return standard;
+    });
+    sendJson(res, 201, saved);
+    return true;
+  }
+
   const stdDetailMatch = url.pathname.match(/^\/api\/v1\/standards\/([^/]+)$/);
   if (req.method === 'GET' && stdDetailMatch) {
     const standardId = decodeURIComponent(stdDetailMatch[1]);
@@ -2524,6 +2993,116 @@ async function handleApi(req, res, url) {
       return true;
     }
     sendJson(res, 200, standard);
+    return true;
+  }
+
+  if (req.method === 'PUT' && stdDetailMatch) {
+    const standardId = decodeURIComponent(stdDetailMatch[1]);
+    const body = await readJsonBody(req);
+    const saved = await withTransaction(async (client) => {
+      const standards = (await loadSectionPayload('ARCH_STANDARDS', client)) || [];
+      const idx = standards.findIndex((x) => x.id === standardId);
+      if (idx < 0) throw new HttpError(404, 'standard not found');
+
+      const current = standards[idx];
+      const merged = {
+        ...current,
+        ...body,
+        id: standardId,
+        chapters: body.chapters === undefined ? current.chapters : body.chapters,
+        rules: body.rules === undefined ? current.rules : body.rules
+      };
+      const normalized = normalizeStandardInput(merged, standardId);
+      const next = [...standards];
+      next[idx] = normalized;
+      await persistStandardsState(client, next);
+      return normalized;
+    });
+    sendJson(res, 200, saved);
+    return true;
+  }
+
+  if (req.method === 'DELETE' && stdDetailMatch) {
+    const standardId = decodeURIComponent(stdDetailMatch[1]);
+    await withTransaction(async (client) => {
+      const standards = (await loadSectionPayload('ARCH_STANDARDS', client)) || [];
+      const next = standards.filter((x) => x.id !== standardId);
+      if (next.length === standards.length) throw new HttpError(404, 'standard not found');
+      await persistStandardsState(client, next);
+    });
+    sendJson(res, 200, { id: standardId, deleted: true });
+    return true;
+  }
+
+  const stdRulesMatch = url.pathname.match(/^\/api\/v1\/standards\/([^/]+)\/rules$/);
+  if (req.method === 'POST' && stdRulesMatch) {
+    const standardId = decodeURIComponent(stdRulesMatch[1]);
+    const body = await readJsonBody(req);
+    const saved = await withTransaction(async (client) => {
+      const standards = (await loadSectionPayload('ARCH_STANDARDS', client)) || [];
+      const idx = standards.findIndex((x) => x.id === standardId);
+      if (idx < 0) throw new HttpError(404, 'standard not found');
+
+      const rule = normalizeRuleInput(body);
+      const current = standards[idx];
+      if ((current.rules || []).some((x) => x.id === rule.id)) {
+        throw new HttpError(409, `rule '${rule.id}' already exists in '${standardId}'`);
+      }
+      const nextStd = { ...current, rules: [...(current.rules || []), rule] };
+      const next = [...standards];
+      next[idx] = nextStd;
+      await persistStandardsState(client, next);
+      return rule;
+    });
+    sendJson(res, 201, saved);
+    return true;
+  }
+
+  const stdRuleItemMatch = url.pathname.match(/^\/api\/v1\/standards\/([^/]+)\/rules\/([^/]+)$/);
+  if (req.method === 'PUT' && stdRuleItemMatch) {
+    const standardId = decodeURIComponent(stdRuleItemMatch[1]);
+    const ruleId = decodeURIComponent(stdRuleItemMatch[2]);
+    const body = await readJsonBody(req);
+    const saved = await withTransaction(async (client) => {
+      const standards = (await loadSectionPayload('ARCH_STANDARDS', client)) || [];
+      const stdIdx = standards.findIndex((x) => x.id === standardId);
+      if (stdIdx < 0) throw new HttpError(404, 'standard not found');
+      const currentStd = standards[stdIdx];
+      const ruleIdx = (currentStd.rules || []).findIndex((x) => x.id === ruleId);
+      if (ruleIdx < 0) throw new HttpError(404, 'rule not found');
+
+      const mergedRule = { ...currentStd.rules[ruleIdx], ...body, id: ruleId };
+      const normalizedRule = normalizeRuleInput(mergedRule, ruleId);
+      const nextRules = [...currentStd.rules];
+      nextRules[ruleIdx] = normalizedRule;
+      const nextStd = { ...currentStd, rules: nextRules };
+      const next = [...standards];
+      next[stdIdx] = nextStd;
+      await persistStandardsState(client, next);
+      return normalizedRule;
+    });
+    sendJson(res, 200, saved);
+    return true;
+  }
+
+  if (req.method === 'DELETE' && stdRuleItemMatch) {
+    const standardId = decodeURIComponent(stdRuleItemMatch[1]);
+    const ruleId = decodeURIComponent(stdRuleItemMatch[2]);
+    await withTransaction(async (client) => {
+      const standards = (await loadSectionPayload('ARCH_STANDARDS', client)) || [];
+      const stdIdx = standards.findIndex((x) => x.id === standardId);
+      if (stdIdx < 0) throw new HttpError(404, 'standard not found');
+      const currentStd = standards[stdIdx];
+      const nextRules = (currentStd.rules || []).filter((x) => x.id !== ruleId);
+      if (nextRules.length === (currentStd.rules || []).length) {
+        throw new HttpError(404, 'rule not found');
+      }
+      const nextStd = { ...currentStd, rules: nextRules };
+      const next = [...standards];
+      next[stdIdx] = nextStd;
+      await persistStandardsState(client, next);
+    });
+    sendJson(res, 200, { stdId: standardId, ruleId, deleted: true });
     return true;
   }
 

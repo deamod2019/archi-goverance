@@ -108,6 +108,20 @@ paths:
           schema: { type: string, enum: [full, basic] }
       responses:
         '200': { description: Application profile }
+    patch:
+      summary: Patch application profile fields
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated application profile }
 
   /api/v1/panorama/applications/{id}/artifacts:
     get:
@@ -377,6 +391,15 @@ paths:
           schema: { type: string, description: Comma-separated field projection paths }
       responses:
         '200': { description: Standard list }
+    post:
+      summary: Create architecture standard
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created standard }
 
   /api/v1/standards/rule-map:
     get:
@@ -394,6 +417,192 @@ paths:
           schema: { type: string }
       responses:
         '200': { description: Standard detail payload }
+    put:
+      summary: Update architecture standard
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated standard }
+    delete:
+      summary: Delete architecture standard
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Deletion result }
+
+  /api/v1/standards/{id}/rules:
+    post:
+      summary: Add rule to architecture standard
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created rule }
+
+  /api/v1/standards/{id}/rules/{ruleId}:
+    put:
+      summary: Update rule under architecture standard
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: path
+          name: ruleId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated rule }
+    delete:
+      summary: Delete rule under architecture standard
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: path
+          name: ruleId
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Deletion result }
+
+  /api/v1/tech-components:
+    get:
+      summary: List technology components
+      parameters:
+        - in: query
+          name: category
+          schema: { type: string }
+        - in: query
+          name: lifecycle
+          schema: { type: string }
+        - in: query
+          name: status
+          schema: { type: string }
+        - in: query
+          name: projection
+          schema: { type: string, enum: [full, summary] }
+        - in: query
+          name: fields
+          schema: { type: string, description: Comma-separated field projection paths }
+      responses:
+        '200': { description: Tech component list }
+    post:
+      summary: Create technology component
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created tech component }
+
+  /api/v1/tech-components/{id}:
+    put:
+      summary: Update technology component
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated tech component }
+    delete:
+      summary: Delete technology component
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Deletion result }
+
+  /api/v1/applications/{id}/tech-components:
+    get:
+      summary: List app-tech relations
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: App-tech relation list }
+    post:
+      summary: Bind tech component to application
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Binding result }
+
+  /api/v1/applications/{id}/tech-components/{componentId}:
+    put:
+      summary: Update app-tech relation
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: path
+          name: componentId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated app-tech relation }
+    delete:
+      summary: Delete app-tech relation
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: path
+          name: componentId
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Deletion result }
 
   /api/v1/capabilities:
     get:
