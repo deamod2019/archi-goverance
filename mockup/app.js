@@ -1076,6 +1076,24 @@ function showStandard(stdId, ruleId) {
   }
 }
 
-// Init
-render();
-
+// Init after data bootstrap is loaded from backend.
+const appReady = window.__APP_DATA_READY__ || Promise.resolve();
+appReady
+  .then(() => render())
+  .catch((error) => {
+    console.error('Failed to initialize app data:', error);
+    const content = document.getElementById('content');
+    const breadcrumb = document.getElementById('breadcrumb');
+    if (breadcrumb) breadcrumb.textContent = '初始化失败';
+    if (content) {
+      content.innerHTML = `
+        <div class="card" style="max-width:760px;margin:24px auto;border-left:3px solid var(--red)">
+          <div class="card-title">数据加载失败</div>
+          <div class="card-desc" style="white-space:normal;line-height:1.7">
+            无法从后端加载初始化数据，请检查服务和数据库状态。<br>
+            错误信息：${error.message || 'unknown error'}
+          </div>
+        </div>
+      `;
+    }
+  });

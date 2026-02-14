@@ -1,25 +1,21 @@
-# ============================================
-# 架构治理系统 - 多阶段 Docker 构建
-# ============================================
+FROM node:25-alpine
 
-# --- 阶段 1: 静态资源服务 (当前) ---
-FROM nginx:1.25-alpine AS production
+WORKDIR /app
 
-# 安装时区支持
-RUN apk add --no-cache tzdata \
-    && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
-    && echo "Asia/Shanghai" > /etc/timezone
+ENV NODE_ENV=production
+ENV PORT=8080
+ENV DB_PATH=/app/data/governance.db
+ENV STATIC_DIR=/app/mockup
+ENV SEED_FILE=/app/mockup/data.seed.js
 
-# 复制自定义 Nginx 配置
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+RUN mkdir -p /app/data
 
-# 复制静态资源
-COPY mockup/ /usr/share/nginx/html/
+COPY server ./server
+COPY mockup ./mockup
 
-# 健康检查 (Render 会用到)
+EXPOSE 8080
+
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget -qO- http://localhost:80/health || exit 1
+  CMD wget -qO- "http://127.0.0.1:${PORT}/health" || exit 1
 
-EXPOSE 80
-
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["node", "server/index.mjs"]

@@ -18,5 +18,15 @@ services:
     autoDeploy: true            # git push 自动部署
     healthCheckPath: /health
     envVars:
+      - key: NODE_ENV
+        value: production
       - key: TZ
         value: Asia/Shanghai
+      - key: DB_PATH
+        value: /app/data/governance.db
+      - key: STATIC_DIR
+        value: /app/mockup
+      - key: SEED_FILE
+        value: /app/mockup/data.seed.js
+      - key: SEED_FORCE
+        value: "true"
