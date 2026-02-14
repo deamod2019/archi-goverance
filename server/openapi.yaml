@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Aichi Governance API
-  version: 1.4.0
+  version: 1.5.0
 servers:
   - url: /
 paths:
@@ -141,6 +141,39 @@ paths:
           schema: { type: string }
       responses:
         '200': { description: Data object list }
+
+  /api/v1/panorama/applications/{id}/interfaces:
+    get:
+      summary: Get API groups/endpoints summary of an application
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Interface summary payload }
+
+  /api/v1/panorama/applications/{id}/runtime:
+    get:
+      summary: Get runtime view of an application
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Runtime payload }
+
+  /api/v1/panorama/applications/{id}/compliance:
+    get:
+      summary: Get compliance checks of an application
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Compliance payload }
 
   /api/v1/panorama/dependency-graph:
     get:
@@ -335,6 +368,18 @@ paths:
           schema: { type: string }
       responses:
         '200': { description: Capability list }
+
+  /api/v1/teams:
+    get:
+      summary: List teams
+      responses:
+        '200': { description: Team list }
+
+  /api/v1/registries:
+    get:
+      summary: List service registries
+      responses:
+        '200': { description: Registry list }
 
   /api/v1/processes:
     get:

@@ -26,6 +26,14 @@ function renderClassification(entity) {
   if (entity.dataLevel) html += `<span class="tag tag-general">📊${entity.dataLevel}</span>`;
   return html;
 }
+function lifecycleTagClass(lifecycle) {
+  const x = String(lifecycle || '').toUpperCase();
+  if (x === 'RECOMMENDED' || x === 'RUNNING' || x === 'NORMAL') return 'tag-general';
+  if (x === 'ALLOWED' || x === 'MAJOR' || x === 'MINOR') return 'tag-important';
+  if (x === 'DEPRECATED' || x === 'WARN' || x === 'LAG') return 'tag-core';
+  if (x === 'FORBIDDEN' || x === 'CRITICAL' || x === 'MISSING') return 'tag-core';
+  return 'tag-general';
+}
 function showPersonPopup(name) {
   const p = PERSONS[name]; if (!p) return;
   closePopup();
@@ -428,10 +436,22 @@ function renderV1Profile(c, b) {
   const state = VIEW_CACHE[cacheKey];
   if (!state) {
     renderLoading(c, '应用画像加载中', `正在获取 ${v1App.name} 画像...`);
-    ensureViewData(cacheKey, () => apiRequest(`/api/v1/panorama/applications/${encodeURIComponent(v1App.id)}/profile`))
+    ensureViewData(cacheKey, async () => {
+      const appId = encodeURIComponent(v1App.id);
+      const [profile, interfaces, artifacts, techComponents, dataObjects, runtime, compliance] = await Promise.all([
+        apiRequest(`/api/v1/panorama/applications/${appId}/profile`),
+        apiRequest(`/api/v1/panorama/applications/${appId}/interfaces`).catch(() => null),
+        apiRequest(`/api/v1/panorama/applications/${appId}/artifacts`).catch(() => []),
+        apiRequest(`/api/v1/panorama/applications/${appId}/tech-components`).catch(() => []),
+        apiRequest(`/api/v1/panorama/applications/${appId}/data-objects`).catch(() => []),
+        apiRequest(`/api/v1/panorama/applications/${appId}/runtime`).catch(() => null),
+        apiRequest(`/api/v1/panorama/applications/${appId}/compliance`).catch(() => null)
+      ]);
+      return { profile, interfaces, artifacts, techComponents, dataObjects, runtime, compliance };
+    })
       .then((data) => {
-        if (data?.profile) v1App = data.profile;
-        if (currentView === 'v1' && v1Level === 4 && v1App?.id === data?.profile?.id) render();
+        if (data?.profile?.profile) v1App = data.profile.profile;
+        if (currentView === 'v1' && v1Level === 4 && v1App?.id === data?.profile?.profile?.id) render();
       })
       .catch(() => {
         if (currentView === 'v1' && v1Level === 4) render();
@@ -446,9 +466,21 @@ function renderV1Profile(c, b) {
     renderLoadError(c, state.error);
     return;
   }
-  const profileData = state.data || {};
+  const viewData = state.data || {};
+  const profileData = viewData.profile || {};
   if (profileData.profile) v1App = profileData.profile;
   const deps = profileData.dependencies || MOCK.dependencies.filter(d => d.source === v1App.id || d.target === v1App.id);
+  const interfaces = viewData.interfaces || { groupCount: 0, endpointCount: 0, protocols: {} };
+  const artifacts = viewData.artifacts || [];
+  const techComponents = viewData.techComponents || [];
+  const dataObjects = viewData.dataObjects || [];
+  const runtime = viewData.runtime || { services: [], artifacts: [], deployment: { dataCenters: [] } };
+  const compliance = viewData.compliance || { checks: [], summary: { total: 0, passed: 0, failed: 0 } };
+  const runtimeInstanceCount = (runtime.services || []).reduce((sum, s) => sum + ((s.instances || []).length), 0);
+  const protocols = Object.keys(interfaces.protocols || {});
+  const protocolText = protocols.length ? protocols.map(k => `${k}(${interfaces.protocols[k]})`).join(' / ') : 'N/A';
+  const effectiveArtifacts = artifacts.length ? artifacts : (runtime.artifacts || []);
+  const dataCenterNames = runtime?.deployment?.dataCenters || [];
 
   c.innerHTML = `<div class="profile-grid fade-in">
     <div class="profile-section"><h3>基本信息</h3>
@@ -462,28 +494,36 @@ function renderV1Profile(c, b) {
       ${v1App.gitRepo ? `<div class="profile-row"><span class="lbl">Git仓库</span><span style="font-size:12px">${v1App.gitRepo}</span></div>` : ''}
     </div>
     <div class="profile-section"><h3>接口概览</h3>
-      <div class="profile-row"><span class="lbl">API Group</span><span>${Math.floor(Math.random() * 5 + 1)}</span></div>
-      <div class="profile-row"><span class="lbl">Endpoint</span><span>${Math.floor(Math.random() * 20 + 5)}</span></div>
-      <div class="profile-row"><span class="lbl">协议</span><span>REST / DUBBO</span></div>
+      <div class="profile-row"><span class="lbl">API Group</span><span>${interfaces.groupCount || 0}</span></div>
+      <div class="profile-row"><span class="lbl">Endpoint</span><span>${interfaces.endpointCount || 0}</span></div>
+      <div class="profile-row"><span class="lbl">协议</span><span>${protocolText}</span></div>
     </div>
     <div class="profile-section"><h3>依赖关系 (${deps.length})</h3>
       ${deps.map(d => `<div class="profile-row"><span class="lbl">${d.source === v1App.id ? '→ 下游' : '← 上游'}</span><span>${d.source === v1App.id ? d.target : d.source} <span class="tag ${d.type === 'DB_SHARE' ? 'tag-core' : 'tag-general'}">${d.type}</span></span></div>`).join('')}
       ${deps.length === 0 ? '<div style="color:var(--text2);font-size:13px">暂无依赖记录</div>' : ''}
     </div>
     <div class="profile-section"><h3>部署实例</h3>
-      <div class="profile-row"><span class="lbl">新数据中心</span><span>2实例</span></div>
-      <div class="profile-row"><span class="lbl">灾备数据中心</span><span>1实例</span></div>
+      <div class="profile-row"><span class="lbl">OTel服务</span><span>${(runtime.services || []).length}</span></div>
+      <div class="profile-row"><span class="lbl">实例数量</span><span>${runtimeInstanceCount}</span></div>
+      ${(dataCenterNames || []).slice(0, 4).map(dc => `<div class="profile-row"><span class="lbl">部署DC</span><span>${dc}</span></div>`).join('')}
+      ${!(dataCenterNames || []).length ? '<div style="color:var(--text2);font-size:13px">暂无部署信息</div>' : ''}
     </div>
     <div class="profile-section"><h3>技术组件</h3>
-      <div class="profile-row"><span class="lbl">Java 17</span><span class="tag tag-general">RECOMMENDED</span></div>
-      <div class="profile-row"><span class="lbl">Spring Boot 3.2</span><span class="tag tag-general">RECOMMENDED</span></div>
-      <div class="profile-row"><span class="lbl">MySQL 8.0</span><span class="tag tag-general">RECOMMENDED</span></div>
+      ${techComponents.slice(0, 4).map(tc => `<div class="profile-row"><span class="lbl">${tc.productName || tc.name || '组件'}</span><span class="tag ${lifecycleTagClass(tc.lifecycle)}">${tc.lifecycle || 'UNKNOWN'}</span></div>`).join('')}
+      ${!techComponents.length ? '<div style="color:var(--text2);font-size:13px">暂无技术组件登记</div>' : ''}
+      ${effectiveArtifacts.slice(0, 2).map(a => `<div class="profile-row"><span class="lbl">制品</span><span>${a.artifactType || 'ARTIFACT'} ${a.version || ''}</span></div>`).join('')}
+      ${dataObjects.slice(0, 2).map(d => `<div class="profile-row"><span class="lbl">数据对象</span><span>${d.objectName || d.dataObjectId}</span></div>`).join('')}
     </div>
     <div class="profile-section"><h3>合规状态</h3>
-      <div class="compliance-result compliance-pass">✅ <a class="rule-link" onclick="event.stopPropagation();showStandard('STD-HA','R001')">R001</a> 核心系统双DC部署</div>
-      <div class="compliance-result compliance-pass">✅ <a class="rule-link" onclick="event.stopPropagation();showStandard('STD-SVC','R004')">R004</a> 微服务已注册</div>
-      <div class="compliance-result compliance-pass">✅ <a class="rule-link" onclick="event.stopPropagation();showStandard('STD-SVC','R007')">R007</a> 已指定负责人</div>
-      <div class="compliance-result compliance-warn">⚠️ <a class="rule-link" onclick="event.stopPropagation();showStandard('STD-SVC','R008')">R008</a> OTel未完全接入</div>
+      ${compliance.checks && compliance.checks.length ? compliance.checks.map(ck => {
+        const ok = !!ck.passed;
+        const icon = ok ? '✅' : (String(ck.severity).toUpperCase() === 'CRITICAL' ? '❌' : '⚠️');
+        const cls = ok ? 'compliance-pass' : (String(ck.severity).toUpperCase() === 'CRITICAL' ? 'compliance-fail' : 'compliance-warn');
+        const std = RULE_STD_MAP[ck.ruleId];
+        const link = std ? `<a class="rule-link" onclick="event.stopPropagation();showStandard('${std.stdId}','${ck.ruleId}')">${ck.ruleId}</a>` : ck.ruleId;
+        return `<div class="compliance-result ${cls}">${icon} ${link} ${ck.message}</div>`;
+      }).join('') : '<div style="color:var(--text2);font-size:13px">暂无合规检查结果</div>'}
+      <div class="profile-row" style="margin-top:8px"><span class="lbl">结果汇总</span><span>${compliance.summary?.passed || 0}/${compliance.summary?.total || 0} 通过</span></div>
     </div>
   </div>
   <div style="margin-top:16px" class="fade-in"><button class="btn btn-primary btn-lg" onclick="switchView('v2')">🔗 查看依赖图</button></div>`;

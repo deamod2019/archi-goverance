@@ -27,7 +27,7 @@ const pool = new Pool(
 
 const STARTUP_DB_RETRIES = Number.parseInt(process.env.STARTUP_DB_RETRIES || '30', 10);
 const STARTUP_DB_RETRY_MS = Number.parseInt(process.env.STARTUP_DB_RETRY_MS || '2000', 10);
-const API_VERSION = process.env.API_VERSION || '1.4.0';
+const API_VERSION = process.env.API_VERSION || '1.5.0';
 const APP_REVISION =
   process.env.RENDER_GIT_COMMIT ||
   process.env.RENDER_GIT_BRANCH_COMMIT ||
@@ -36,25 +36,26 @@ const APP_REVISION =
   'dev';
 
 const REQUIRED_SECTIONS = ['MOCK', 'PERSONS', 'TEAMS', 'ARCH_STANDARDS', 'RULE_STD_MAP'];
-const TARGET_ENTITY_TOTAL = 43;
-const COVERAGE_TABLES = [
+const ENTITY_TABLES = [
   'domains',
   'capabilities',
   'processes',
   'systems',
   'subsystems',
   'applications',
-  'dependency_nodes',
+  'microservices',
+  'api_groups',
+  'api_endpoints',
+  'teams',
+  'registries',
   'dependencies',
   'data_objects',
   'subject_areas',
   'logical_entities',
   'tech_standards',
   'tech_components',
-  'app_tech_rel',
   'compliance_rules',
   'reviews',
-  'review_checks',
   'artifacts',
   'otel_services',
   'otel_instances',
@@ -74,14 +75,10 @@ const COVERAGE_TABLES = [
   'database_clusters',
   'database_instances',
   'database_dr',
-  'database_cluster_apps',
   'middleware_clusters',
   'middleware_instances',
-  'middleware_cluster_apps',
   'lb_clusters',
-  'lb_devices',
   'lb_service_pools',
-  'lb_pool_members',
   'lb_domains'
 ];
 
@@ -182,6 +179,30 @@ async function initSchema() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    CREATE TABLE IF NOT EXISTS microservices (
+      id TEXT PRIMARY KEY,
+      app_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS api_groups (
+      id TEXT PRIMARY KEY,
+      app_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS api_endpoints (
+      id TEXT PRIMARY KEY,
+      group_id TEXT NOT NULL REFERENCES api_groups(id) ON DELETE CASCADE,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     CREATE TABLE IF NOT EXISTS dependency_nodes (
       id TEXT PRIMARY KEY,
       payload JSONB NOT NULL,
@@ -200,6 +221,20 @@ async function initSchema() {
 
     CREATE TABLE IF NOT EXISTS compliance_rules (
       rule_id TEXT PRIMARY KEY,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS teams (
+      id TEXT PRIMARY KEY,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS registries (
+      id TEXT PRIMARY KEY,
       payload JSONB NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -522,6 +557,9 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_systems_domain_id ON systems(domain_id);
     CREATE INDEX IF NOT EXISTS idx_subsystems_system_id ON subsystems(system_id);
     CREATE INDEX IF NOT EXISTS idx_applications_subsystem_id ON applications(subsystem_id);
+    CREATE INDEX IF NOT EXISTS idx_microservices_app_id ON microservices(app_id);
+    CREATE INDEX IF NOT EXISTS idx_api_groups_app_id ON api_groups(app_id);
+    CREATE INDEX IF NOT EXISTS idx_api_endpoints_group_id ON api_endpoints(group_id);
     CREATE INDEX IF NOT EXISTS idx_dependencies_source ON dependencies(source);
     CREATE INDEX IF NOT EXISTS idx_dependencies_target ON dependencies(target);
     CREATE INDEX IF NOT EXISTS idx_reviews_status ON reviews(status);
@@ -578,7 +616,7 @@ async function upsertMockSections(client, seedData) {
 }
 
 async function reseedStructuredData(client, seedData) {
-  await client.query('TRUNCATE TABLE review_checks, reviews, dependencies, dependency_nodes, data_objects, app_tech_rel, artifacts, otel_instances, otel_services, containers, k8s_namespaces, k8s_clusters, virtual_machines, physical_servers, racks, machine_rooms, lb_domains, lb_pool_members, lb_service_pools, lb_devices, lb_clusters, firewall_rules, vips, network_devices, physical_networks, network_zones, applications, subsystems, processes, capabilities, logical_entities, subject_areas, systems, domains, compliance_rules, data_centers, database_instances, database_cluster_apps, database_dr, database_clusters, middleware_instances, middleware_cluster_apps, middleware_clusters, tech_components, tech_standards, drift_events, traffic_chains RESTART IDENTITY CASCADE');
+  await client.query('TRUNCATE TABLE review_checks, reviews, api_endpoints, api_groups, microservices, dependencies, dependency_nodes, data_objects, app_tech_rel, artifacts, otel_instances, otel_services, containers, k8s_namespaces, k8s_clusters, virtual_machines, physical_servers, racks, machine_rooms, lb_domains, lb_pool_members, lb_service_pools, lb_devices, lb_clusters, firewall_rules, vips, network_devices, physical_networks, network_zones, applications, subsystems, processes, capabilities, logical_entities, subject_areas, systems, domains, compliance_rules, teams, registries, data_centers, database_instances, database_cluster_apps, database_dr, database_clusters, middleware_instances, middleware_cluster_apps, middleware_clusters, tech_components, tech_standards, drift_events, traffic_chains RESTART IDENTITY CASCADE');
 
   for (const domain of seedData.MOCK.domains || []) {
     await client.query('INSERT INTO domains (id, payload) VALUES ($1, $2::jsonb)', [domain.id, JSON.stringify(domain)]);
@@ -599,6 +637,57 @@ async function reseedStructuredData(client, seedData) {
   for (const [subsystemId, apps] of Object.entries(seedData.MOCK.apps || {})) {
     for (const app of apps) {
       await client.query('INSERT INTO applications (id, subsystem_id, payload) VALUES ($1, $2, $3::jsonb)', [app.id, subsystemId, JSON.stringify(app)]);
+    }
+  }
+
+  for (const [subsystemId, apps] of Object.entries(seedData.MOCK.apps || {})) {
+    for (const app of apps) {
+      if (app.type === 'MICROSERVICE') {
+        await client.query('INSERT INTO microservices (id, app_id, payload) VALUES ($1, $2, $3::jsonb)', [
+          `ms-${app.id}`,
+          app.id,
+          JSON.stringify({
+            microserviceId: `ms-${app.id}`,
+            appId: app.id,
+            serviceName: app.id,
+            registerType: 'NACOS',
+            status: app.status || 'RUNNING'
+          })
+        ]);
+      }
+
+      const publicGroupId = `ag-${app.id}-public`;
+      const internalGroupId = `ag-${app.id}-internal`;
+      await client.query('INSERT INTO api_groups (id, app_id, payload) VALUES ($1, $2, $3::jsonb)', [
+        publicGroupId,
+        app.id,
+        JSON.stringify({
+          groupId: publicGroupId,
+          appId: app.id,
+          groupName: 'Public API',
+          protocol: 'REST'
+        })
+      ]);
+      await client.query('INSERT INTO api_groups (id, app_id, payload) VALUES ($1, $2, $3::jsonb)', [
+        internalGroupId,
+        app.id,
+        JSON.stringify({
+          groupId: internalGroupId,
+          appId: app.id,
+          groupName: 'Internal API',
+          protocol: 'REST'
+        })
+      ]);
+
+      const endpoints = [
+        { id: `ep-${app.id}-health`, groupId: internalGroupId, path: '/health', method: 'GET', protocol: 'HTTP', security: 'INTERNAL' },
+        { id: `ep-${app.id}-query`, groupId: publicGroupId, path: '/api/query', method: 'GET', protocol: 'HTTP', security: 'JWT' },
+        { id: `ep-${app.id}-create`, groupId: publicGroupId, path: '/api/create', method: 'POST', protocol: 'HTTP', security: 'JWT' },
+        { id: `ep-${app.id}-update`, groupId: publicGroupId, path: '/api/update', method: 'PUT', protocol: 'HTTP', security: 'JWT' }
+      ];
+      for (const ep of endpoints) {
+        await client.query('INSERT INTO api_endpoints (id, group_id, payload) VALUES ($1, $2, $3::jsonb)', [ep.id, ep.groupId, JSON.stringify(ep)]);
+      }
     }
   }
 
@@ -623,6 +712,31 @@ async function reseedStructuredData(client, seedData) {
   }
   for (const [ruleId, payload] of rulesById.entries()) {
     await client.query('INSERT INTO compliance_rules (rule_id, payload) VALUES ($1, $2::jsonb)', [ruleId, JSON.stringify(payload)]);
+  }
+
+  for (const [teamName, teamPayload] of Object.entries(seedData.TEAMS || {})) {
+    const id = `team-${Buffer.from(teamName, 'utf8').toString('hex').slice(0, 24)}`;
+    await client.query('INSERT INTO teams (id, payload) VALUES ($1, $2::jsonb)', [id, JSON.stringify({ id, ...teamPayload })]);
+  }
+
+  const registries = [
+    {
+      id: 'registry-nacos-prod',
+      registryName: 'Nacos生产注册中心',
+      registryType: 'NACOS',
+      endpoint: 'nacos.prod.bank.com:8848',
+      status: 'RUNNING'
+    },
+    {
+      id: 'registry-k8s-dns',
+      registryName: 'K8S DNS服务发现',
+      registryType: 'K8S_DNS',
+      endpoint: 'kube-dns.kube-system.svc',
+      status: 'RUNNING'
+    }
+  ];
+  for (const registry of registries) {
+    await client.query('INSERT INTO registries (id, payload) VALUES ($1, $2::jsonb)', [registry.id, JSON.stringify(registry)]);
   }
 
   for (const review of seedData.MOCK.reviews || []) {
@@ -1384,19 +1498,19 @@ async function nextReviewId() {
 
 async function getEntityCoverage() {
   const details = [];
-  for (const tableName of COVERAGE_TABLES) {
+  for (const tableName of ENTITY_TABLES) {
     const { rows } = await pool.query(`SELECT COUNT(*)::int AS n FROM ${tableName}`);
     details.push({ table: tableName, rows: rows[0].n });
   }
   const nonEmptyCount = details.filter((d) => d.rows > 0).length;
-  const mappedEntityCount = Math.min(nonEmptyCount, TARGET_ENTITY_TOTAL);
-  const coverage = Number(((mappedEntityCount / TARGET_ENTITY_TOTAL) * 100).toFixed(1));
+  const mappedEntityCount = nonEmptyCount;
+  const coverage = Number(((mappedEntityCount / ENTITY_TABLES.length) * 100).toFixed(1));
   return {
-    targetEntities: TARGET_ENTITY_TOTAL,
+    targetEntities: ENTITY_TABLES.length,
     mappedEntities: mappedEntityCount,
     coveragePct: coverage,
     nonEmptyTables: nonEmptyCount,
-    tableCount: COVERAGE_TABLES.length,
+    tableCount: ENTITY_TABLES.length,
     details
   };
 }
@@ -1774,6 +1888,141 @@ async function handleApi(req, res, url) {
     return true;
   }
 
+  const appInterfacesMatch = url.pathname.match(/^\/api\/v1\/panorama\/applications\/([^/]+)\/interfaces$/);
+  if (req.method === 'GET' && appInterfacesMatch) {
+    const appId = decodeURIComponent(appInterfacesMatch[1]);
+    const groupRes = await pool.query('SELECT id, payload FROM api_groups WHERE app_id = $1 ORDER BY id', [appId]);
+    const groupIds = groupRes.rows.map((row) => row.id);
+    let endpointRows = [];
+    if (groupIds.length) {
+      const endpointRes = await pool.query('SELECT payload, group_id FROM api_endpoints WHERE group_id = ANY($1::text[]) ORDER BY id', [groupIds]);
+      endpointRows = endpointRes.rows;
+    }
+    const groups = groupRes.rows.map((row) => row.payload);
+    const endpoints = endpointRows.map((row) => row.payload);
+    const byProtocol = endpoints.reduce((acc, ep) => {
+      const key = ep.protocol || 'UNKNOWN';
+      acc[key] = (acc[key] || 0) + 1;
+      return acc;
+    }, {});
+    sendJson(res, 200, {
+      appId,
+      groupCount: groups.length,
+      endpointCount: endpoints.length,
+      protocols: byProtocol,
+      groups,
+      endpoints
+    });
+    return true;
+  }
+
+  const appRuntimeMatch = url.pathname.match(/^\/api\/v1\/panorama\/applications\/([^/]+)\/runtime$/);
+  if (req.method === 'GET' && appRuntimeMatch) {
+    const appId = decodeURIComponent(appRuntimeMatch[1]);
+    const [svcRes, artifactRes, deployRes] = await Promise.all([
+      pool.query('SELECT id, payload FROM otel_services WHERE app_id = $1 ORDER BY id', [appId]),
+      pool.query('SELECT payload FROM artifacts WHERE app_id = $1 ORDER BY id', [appId]),
+      pool.query(
+        `
+        SELECT sy.payload AS system_payload
+        FROM applications a
+        JOIN subsystems ss ON ss.id = a.subsystem_id
+        JOIN systems sy ON sy.id = ss.system_id
+        WHERE a.id = $1
+        `,
+        [appId]
+      )
+    ]);
+
+    const services = [];
+    for (const row of svcRes.rows) {
+      const instRes = await pool.query('SELECT payload FROM otel_instances WHERE service_id = $1 ORDER BY id', [row.id]);
+      services.push({ service: row.payload, instances: instRes.rows.map((r) => r.payload) });
+    }
+
+    const system = deployRes.rows[0]?.system_payload || null;
+    const dataCenters = system ? splitDataCenters(system.dataCenters) : [];
+
+    sendJson(res, 200, {
+      appId,
+      services,
+      artifacts: artifactRes.rows.map((row) => row.payload),
+      deployment: {
+        systemId: system?.id || null,
+        dataCenters,
+        multiDc: dataCenters.length >= 2
+      }
+    });
+    return true;
+  }
+
+  const appComplianceMatch = url.pathname.match(/^\/api\/v1\/panorama\/applications\/([^/]+)\/compliance$/);
+  if (req.method === 'GET' && appComplianceMatch) {
+    const appId = decodeURIComponent(appComplianceMatch[1]);
+    const [appRes, svcRes, dataObjRes, techRes, deployRes] = await Promise.all([
+      pool.query('SELECT payload FROM applications WHERE id = $1', [appId]),
+      pool.query('SELECT COUNT(*)::int AS n FROM otel_services WHERE app_id = $1', [appId]),
+      pool.query('SELECT COUNT(*)::int AS n FROM data_objects WHERE app_id = $1', [appId]),
+      pool.query(
+        `
+        SELECT tc.payload
+        FROM app_tech_rel rel
+        JOIN tech_components tc ON tc.id = rel.component_id
+        WHERE rel.app_id = $1
+        `,
+        [appId]
+      ),
+      pool.query(
+        `
+        SELECT sy.payload AS system_payload
+        FROM applications a
+        JOIN subsystems ss ON ss.id = a.subsystem_id
+        JOIN systems sy ON sy.id = ss.system_id
+        WHERE a.id = $1
+        `,
+        [appId]
+      )
+    ]);
+    if (!appRes.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'application not found' });
+      return true;
+    }
+
+    const app = appRes.rows[0].payload;
+    const system = deployRes.rows[0]?.system_payload || {};
+    const dcs = splitDataCenters(system.dataCenters);
+    const badTech = techRes.rows
+      .map((row) => row.payload)
+      .filter((x) => ['DEPRECATED', 'FORBIDDEN'].includes(String(x.lifecycle || '').toUpperCase()));
+
+    const checks = [
+      { ruleId: 'R007', severity: 'MINOR', passed: !!String(app.owner || '').trim(), message: '应用必须有负责人' },
+      { ruleId: 'R008', severity: 'MAJOR', passed: svcRes.rows[0].n > 0, message: '应用应接入OTel' },
+      { ruleId: 'R004', severity: 'MAJOR', passed: badTech.length === 0, message: '技术选型应位于标准栈可用范围' },
+      { ruleId: 'R101', severity: 'MINOR', passed: dataObjRes.rows[0].n > 0, message: '应用应登记至少一个数据对象' },
+      {
+        ruleId: 'R001',
+        severity: system.level === 'CORE' ? 'CRITICAL' : 'MAJOR',
+        passed: system.level === 'CORE' ? dcs.length >= 2 : true,
+        message: '核心系统应用需双DC部署'
+      }
+    ];
+    sendJson(res, 200, {
+      appId,
+      checks,
+      summary: {
+        total: checks.length,
+        passed: checks.filter((x) => x.passed).length,
+        failed: checks.filter((x) => !x.passed).length
+      },
+      details: {
+        deprecatedTech: badTech.map((x) => x.productName),
+        dataCenters: dcs
+      }
+    });
+    return true;
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/v1/panorama/data-centers/summary') {
     const { rows } = await pool.query('SELECT payload FROM data_centers ORDER BY payload->>\'name\'');
     sendJson(res, 200, rows.map((row) => row.payload));
@@ -1965,6 +2214,18 @@ async function handleApi(req, res, url) {
     }
     sql += ' ORDER BY id';
     const { rows } = await pool.query(sql, params);
+    sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/teams') {
+    const { rows } = await pool.query('SELECT payload FROM teams ORDER BY payload->>\'name\'');
+    sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/registries') {
+    const { rows } = await pool.query('SELECT payload FROM registries ORDER BY payload->>\'registryName\'');
     sendJson(res, 200, rows.map((row) => row.payload));
     return true;
   }
