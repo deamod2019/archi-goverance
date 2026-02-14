@@ -410,6 +410,7 @@ function generateApps(sub) {
 function drillApp(appId) {
   const allApps = Object.values(MOCK.apps).flat();
   v1App = allApps.find(a => a.id === appId);
+  if (!v1App) return;
   v1Level = 4;
   render();
 }
@@ -417,8 +418,38 @@ function drillApp(appId) {
 // Level 4: App 360° profile
 function renderV1Profile(c, b) {
   const subName = v1Subsystem ? v1Subsystem.name : '';
+  if (!v1App) {
+    renderLoadError(c, new Error('应用不存在'));
+    return;
+  }
   b.innerHTML = `<span onclick="switchView('v1')">全景图</span> &gt; <span onclick="v1Level=0;render()">业务能力</span> &gt; <span onclick="v1Level=1;render()">${v1Domain.name}</span> &gt; <span onclick="v1Level=2;render()">${v1System.name}</span> &gt; <span onclick="v1Level=3;render()">${subName}</span> &gt; ${v1App.name}`;
-  const deps = MOCK.dependencies.filter(d => d.source === v1App.id || d.target === v1App.id);
+
+  const cacheKey = `v1-app-${v1App.id}`;
+  const state = VIEW_CACHE[cacheKey];
+  if (!state) {
+    renderLoading(c, '应用画像加载中', `正在获取 ${v1App.name} 画像...`);
+    ensureViewData(cacheKey, () => apiRequest(`/api/v1/panorama/applications/${encodeURIComponent(v1App.id)}/profile`))
+      .then((data) => {
+        if (data?.profile) v1App = data.profile;
+        if (currentView === 'v1' && v1Level === 4 && v1App?.id === data?.profile?.id) render();
+      })
+      .catch(() => {
+        if (currentView === 'v1' && v1Level === 4) render();
+      });
+    return;
+  }
+  if (state.status === 'loading') {
+    renderLoading(c, '应用画像加载中', `正在获取 ${v1App.name} 画像...`);
+    return;
+  }
+  if (state.status === 'error') {
+    renderLoadError(c, state.error);
+    return;
+  }
+  const profileData = state.data || {};
+  if (profileData.profile) v1App = profileData.profile;
+  const deps = profileData.dependencies || MOCK.dependencies.filter(d => d.source === v1App.id || d.target === v1App.id);
+
   c.innerHTML = `<div class="profile-grid fade-in">
     <div class="profile-section"><h3>基本信息</h3>
       <div class="profile-row"><span class="lbl">应用编码</span><span>${v1App.id}</span></div>
@@ -488,9 +519,9 @@ function renderV2(c, b) {
 
   c.innerHTML = `<div class="graph-container fade-in" id="graphBox">
     <div class="graph-controls">
-      <button class="active" onclick="setDepthFilter(0)">全部</button>
-      <button onclick="setDepthFilter(1)">1跳</button>
-      <button onclick="setDepthFilter(2)">2跳</button>
+      <button class="active" onclick="setDepthFilter(0,this)">全部</button>
+      <button onclick="setDepthFilter(1,this)">1跳</button>
+      <button onclick="setDepthFilter(2,this)">2跳</button>
       <button onclick="highlightDBShare()" style="color:var(--red)">🔴 DB共享</button>
     </div>
     <svg id="depGraph"></svg>
@@ -587,9 +618,9 @@ function showImpact(nodeId) {
   panel.classList.add('open');
 }
 
-function setDepthFilter(d) {
+function setDepthFilter(d, btn) {
   document.querySelectorAll('.graph-controls button').forEach(b => b.classList.remove('active'));
-  event.target.classList.add('active');
+  btn?.classList.add('active');
 }
 
 function highlightDBShare() {
