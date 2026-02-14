@@ -906,6 +906,20 @@ paths:
       responses:
         '200': { description: Compliance re-run result }
 
+  /api/v1/reviews/{id}/events:
+    get:
+      summary: List review audit events
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 500 }
+      responses:
+        '200': { description: Review event timeline }
+
   /api/v1/reviews/{id}/approve:
     put:
       summary: Approve review

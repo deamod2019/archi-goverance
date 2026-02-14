@@ -264,6 +264,15 @@ async function initSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    CREATE TABLE IF NOT EXISTS review_events (
+      id BIGSERIAL PRIMARY KEY,
+      review_id TEXT NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
+      action TEXT NOT NULL,
+      actor TEXT NOT NULL DEFAULT 'system',
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     CREATE TABLE IF NOT EXISTS data_centers (
       id TEXT PRIMARY KEY,
       payload JSONB NOT NULL,
@@ -564,6 +573,8 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_dependencies_target ON dependencies(target);
     CREATE INDEX IF NOT EXISTS idx_reviews_status ON reviews(status);
     CREATE INDEX IF NOT EXISTS idx_review_checks_review_id ON review_checks(review_id);
+    CREATE INDEX IF NOT EXISTS idx_review_events_review_id ON review_events(review_id);
+    CREATE INDEX IF NOT EXISTS idx_review_events_created_at ON review_events(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_database_instances_cluster_id ON database_instances(cluster_id);
     CREATE INDEX IF NOT EXISTS idx_database_cluster_apps_cluster_id ON database_cluster_apps(cluster_id);
     CREATE INDEX IF NOT EXISTS idx_database_dr_primary_cluster_id ON database_dr(primary_cluster_id);
@@ -616,7 +627,7 @@ async function upsertMockSections(client, seedData) {
 }
 
 async function reseedStructuredData(client, seedData) {
-  await client.query('TRUNCATE TABLE review_checks, reviews, api_endpoints, api_groups, microservices, dependencies, dependency_nodes, data_objects, app_tech_rel, artifacts, otel_instances, otel_services, containers, k8s_namespaces, k8s_clusters, virtual_machines, physical_servers, racks, machine_rooms, lb_domains, lb_pool_members, lb_service_pools, lb_devices, lb_clusters, firewall_rules, vips, network_devices, physical_networks, network_zones, applications, subsystems, processes, capabilities, logical_entities, subject_areas, systems, domains, compliance_rules, teams, registries, data_centers, database_instances, database_cluster_apps, database_dr, database_clusters, middleware_instances, middleware_cluster_apps, middleware_clusters, tech_components, tech_standards, drift_events, traffic_chains RESTART IDENTITY CASCADE');
+  await client.query('TRUNCATE TABLE review_events, review_checks, reviews, api_endpoints, api_groups, microservices, dependencies, dependency_nodes, data_objects, app_tech_rel, artifacts, otel_instances, otel_services, containers, k8s_namespaces, k8s_clusters, virtual_machines, physical_servers, racks, machine_rooms, lb_domains, lb_pool_members, lb_service_pools, lb_devices, lb_clusters, firewall_rules, vips, network_devices, physical_networks, network_zones, applications, subsystems, processes, capabilities, logical_entities, subject_areas, systems, domains, compliance_rules, teams, registries, data_centers, database_instances, database_cluster_apps, database_dr, database_clusters, middleware_instances, middleware_cluster_apps, middleware_clusters, tech_components, tech_standards, drift_events, traffic_chains RESTART IDENTITY CASCADE');
 
   for (const domain of seedData.MOCK.domains || []) {
     await client.query('INSERT INTO domains (id, payload) VALUES ($1, $2::jsonb)', [domain.id, JSON.stringify(domain)]);
@@ -755,6 +766,16 @@ async function reseedStructuredData(client, seedData) {
         review.date,
         review.status,
         JSON.stringify(review)
+      ]
+    );
+    await client.query(
+      'INSERT INTO review_events (review_id, action, actor, payload, created_at) VALUES ($1, $2, $3, $4::jsonb, $5::timestamptz)',
+      [
+        review.id,
+        'CREATED',
+        'seed',
+        JSON.stringify({ status: review.status, source: 'seed' }),
+        `${review.date}T09:00:00Z`
       ]
     );
   }
@@ -1858,8 +1879,15 @@ async function replaceReviewChecks(client, reviewId, checks) {
   }
 }
 
+async function appendReviewEvent(queryable, reviewId, action, payload = {}, actor = 'system') {
+  await queryable.query(
+    'INSERT INTO review_events (review_id, action, actor, payload) VALUES ($1, $2, $3, $4::jsonb)',
+    [reviewId, action, actor, JSON.stringify(payload || {})]
+  );
+}
+
 async function runReviewCompliance(reviewId, options = {}) {
-  const { updateStatus = true, allowedStatuses = null } = options;
+  const { updateStatus = true, allowedStatuses = null, action = null } = options;
   const review = await loadReviewRowOrThrow(reviewId);
 
   if (Array.isArray(allowedStatuses) && allowedStatuses.length > 0 && !allowedStatuses.includes(review.status)) {
@@ -1869,6 +1897,7 @@ async function runReviewCompliance(reviewId, options = {}) {
   const checks = await evaluateCompliance(review);
   const hasCriticalFail = checks.some((c) => !c.passed && c.severity === 'CRITICAL');
   const nextStatus = updateStatus ? (hasCriticalFail ? 'DRAFT' : 'REVIEWING') : review.status;
+  const summary = summarizeReviewChecks(checks);
 
   await withTransaction(async (client) => {
     await replaceReviewChecks(client, reviewId, checks);
@@ -1877,6 +1906,14 @@ async function runReviewCompliance(reviewId, options = {}) {
     } else {
       await client.query('UPDATE reviews SET updated_at = now() WHERE id = $1', [reviewId]);
     }
+    if (action) {
+      await appendReviewEvent(client, reviewId, action, {
+        previousStatus: review.status,
+        status: nextStatus,
+        blocked: hasCriticalFail,
+        summary
+      });
+    }
   });
 
   return {
@@ -1884,7 +1921,7 @@ async function runReviewCompliance(reviewId, options = {}) {
     previousStatus: review.status,
     status: nextStatus,
     blocked: hasCriticalFail,
-    summary: summarizeReviewChecks(checks),
+    summary,
     checks
   };
 }
@@ -3247,14 +3284,16 @@ async function handleApi(req, res, url) {
     const date = body.date || new Date().toISOString().slice(0, 10);
     const status = body.status || 'DRAFT';
     const payload = { ...body };
-
-    await pool.query(
-      `
-      INSERT INTO reviews (id, title, type, system, level, applicant, review_date, status, payload)
-      VALUES ($1, $2, $3, $4, $5, $6, $7::date, $8, $9::jsonb)
-      `,
-      [id, body.title, body.type, body.system || null, body.level || null, body.applicant || null, date, status, JSON.stringify(payload)]
-    );
+    await withTransaction(async (client) => {
+      await client.query(
+        `
+        INSERT INTO reviews (id, title, type, system, level, applicant, review_date, status, payload)
+        VALUES ($1, $2, $3, $4, $5, $6, $7::date, $8, $9::jsonb)
+        `,
+        [id, body.title, body.type, body.system || null, body.level || null, body.applicant || null, date, status, JSON.stringify(payload)]
+      );
+      await appendReviewEvent(client, id, 'CREATED', { status, title: body.title });
+    });
 
     sendJson(res, 201, { id, title: body.title, type: body.type, system: body.system || null, level: body.level || null, applicant: body.applicant || null, date, status });
     return true;
@@ -3284,7 +3323,7 @@ async function handleApi(req, res, url) {
   const reviewSubmitMatch = url.pathname.match(/^\/api\/v1\/reviews\/([^/]+)\/submit$/);
   if (req.method === 'PUT' && reviewSubmitMatch) {
     const reviewId = decodeURIComponent(reviewSubmitMatch[1]);
-    const result = await runReviewCompliance(reviewId, { updateStatus: true });
+    const result = await runReviewCompliance(reviewId, { updateStatus: true, action: 'SUBMITTED' });
     sendJson(res, 200, result);
     return true;
   }
@@ -3294,7 +3333,8 @@ async function handleApi(req, res, url) {
     const reviewId = decodeURIComponent(reviewResubmitMatch[1]);
     const result = await runReviewCompliance(reviewId, {
       updateStatus: true,
-      allowedStatuses: ['DRAFT', 'REJECTED']
+      allowedStatuses: ['DRAFT', 'REJECTED'],
+      action: 'RESUBMITTED'
     });
     sendJson(res, 200, result);
     return true;
@@ -3314,22 +3354,43 @@ async function handleApi(req, res, url) {
   const reviewChecksRunMatch = url.pathname.match(/^\/api\/v1\/reviews\/([^/]+)\/compliance-check\/run$/);
   if (req.method === 'POST' && reviewChecksRunMatch) {
     const reviewId = decodeURIComponent(reviewChecksRunMatch[1]);
-    const result = await runReviewCompliance(reviewId, { updateStatus: false });
+    const result = await runReviewCompliance(reviewId, { updateStatus: false, action: 'CHECKS_RERUN' });
     sendJson(res, 200, { ...result, rerun: true });
+    return true;
+  }
+
+  const reviewEventsMatch = url.pathname.match(/^\/api\/v1\/reviews\/([^/]+)\/events$/);
+  if (req.method === 'GET' && reviewEventsMatch) {
+    const reviewId = decodeURIComponent(reviewEventsMatch[1]);
+    await loadReviewRowOrThrow(reviewId);
+    const rawLimit = Number.parseInt(url.searchParams.get('limit') || '100', 10);
+    const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(rawLimit, 500)) : 100;
+    const { rows } = await pool.query(
+      'SELECT id, action, actor, payload, created_at FROM review_events WHERE review_id = $1 ORDER BY id DESC LIMIT $2',
+      [reviewId, limit]
+    );
+    const events = rows.map((row) => ({
+      id: row.id,
+      action: row.action,
+      actor: row.actor,
+      payload: row.payload || {},
+      at: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at)
+    }));
+    sendJson(res, 200, events);
     return true;
   }
 
   const reviewApproveMatch = url.pathname.match(/^\/api\/v1\/reviews\/([^/]+)\/approve$/);
   if (req.method === 'PUT' && reviewApproveMatch) {
     const reviewId = decodeURIComponent(reviewApproveMatch[1]);
-    const result = await pool.query(
-      'UPDATE reviews SET status = $2, updated_at = now() WHERE id = $1 RETURNING id',
-      [reviewId, 'APPROVED']
-    );
-    if (!result.rows.length) {
-      sendJson(res, 404, { error: 'not_found', message: 'review not found' });
-      return true;
-    }
+    await withTransaction(async (client) => {
+      const result = await client.query(
+        'UPDATE reviews SET status = $2, updated_at = now() WHERE id = $1 RETURNING id',
+        [reviewId, 'APPROVED']
+      );
+      if (!result.rows.length) throw new HttpError(404, 'review not found');
+      await appendReviewEvent(client, reviewId, 'APPROVED', { status: 'APPROVED' });
+    });
     sendJson(res, 200, { id: reviewId, status: 'APPROVED' });
     return true;
   }
@@ -3337,14 +3398,14 @@ async function handleApi(req, res, url) {
   const reviewRejectMatch = url.pathname.match(/^\/api\/v1\/reviews\/([^/]+)\/reject$/);
   if (req.method === 'PUT' && reviewRejectMatch) {
     const reviewId = decodeURIComponent(reviewRejectMatch[1]);
-    const result = await pool.query(
-      'UPDATE reviews SET status = $2, updated_at = now() WHERE id = $1 RETURNING id',
-      [reviewId, 'REJECTED']
-    );
-    if (!result.rows.length) {
-      sendJson(res, 404, { error: 'not_found', message: 'review not found' });
-      return true;
-    }
+    await withTransaction(async (client) => {
+      const result = await client.query(
+        'UPDATE reviews SET status = $2, updated_at = now() WHERE id = $1 RETURNING id',
+        [reviewId, 'REJECTED']
+      );
+      if (!result.rows.length) throw new HttpError(404, 'review not found');
+      await appendReviewEvent(client, reviewId, 'REJECTED', { status: 'REJECTED' });
+    });
     sendJson(res, 200, { id: reviewId, status: 'REJECTED' });
     return true;
   }

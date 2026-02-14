@@ -1434,6 +1434,25 @@ function reviewStatusMeta(status) {
   return { cls: 'status-draft', text: '草稿' };
 }
 
+function reviewEventMeta(action) {
+  const map = {
+    CREATED: { icon: '🆕', text: '创建评审' },
+    SUBMITTED: { icon: '📤', text: '提交评审' },
+    RESUBMITTED: { icon: '🔁', text: '重新提交' },
+    CHECKS_RERUN: { icon: '🔄', text: '重跑检查' },
+    APPROVED: { icon: '✅', text: '评审通过' },
+    REJECTED: { icon: '❌', text: '评审驳回' }
+  };
+  return map[action] || { icon: '📝', text: action || 'UNKNOWN' };
+}
+
+function formatDateTimeLabel(value) {
+  if (!value) return '—';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toLocaleString('zh-CN', { hour12: false });
+}
+
 async function showReviewDetailById(reviewId) {
   closePopup();
   const overlay = document.createElement('div'); overlay.className = 'popup-overlay'; overlay.onclick = closePopup;
@@ -1446,9 +1465,13 @@ async function showReviewDetailById(reviewId) {
   document.body.appendChild(overlay);
   document.body.appendChild(popup);
   try {
-    const detail = await apiRequest(`/api/v1/reviews/${encodeURIComponent(reviewId)}?include_checks=true`);
+    const [detail, events] = await Promise.all([
+      apiRequest(`/api/v1/reviews/${encodeURIComponent(reviewId)}?include_checks=true`),
+      apiRequest(`/api/v1/reviews/${encodeURIComponent(reviewId)}/events?limit=20`).catch(() => [])
+    ]);
     const st = reviewStatusMeta(detail.status);
     const checks = Array.isArray(detail.checks) ? detail.checks : [];
+    const timeline = Array.isArray(events) ? events : [];
     const summary = {
       total: checks.length,
       passed: checks.filter((x) => x.passed).length,
@@ -1459,6 +1482,18 @@ async function showReviewDetailById(reviewId) {
         checks.map((x) => `<tr><td>${x.ruleId}</td><td>${x.severity}</td><td>${x.passed ? '✅ 通过' : '❌ 未通过'}</td><td>${x.message || ''}</td></tr>`).join('')
       }</tbody></table>`
       : '<div style="color:var(--text2)">暂无检查记录</div>';
+    const timelineHtml = timeline.length
+      ? timeline.map((ev) => {
+        const meta = reviewEventMeta(ev.action);
+        return `<div class="popup-row" style="align-items:flex-start">
+          <span class="lbl">${meta.icon} ${meta.text}</span>
+          <span style="display:flex;flex-direction:column;gap:2px;align-items:flex-end">
+            <span style="font-size:12px">${formatDateTimeLabel(ev.at)}</span>
+            <span style="font-size:11px;color:var(--text2)">actor: ${ev.actor || 'system'}</span>
+          </span>
+        </div>`;
+      }).join('')
+      : '<div style="color:var(--text2)">暂无事件记录</div>';
     const canResubmit = detail.status === 'REJECTED' || detail.status === 'DRAFT';
     popup.querySelector('.popup-body').innerHTML = `
       <div class="popup-row"><span class="lbl">标题</span><span><strong>${detail.title || ''}</strong></span></div>
@@ -1472,6 +1507,8 @@ async function showReviewDetailById(reviewId) {
         <button class="btn btn-outline" onclick="rerunReviewChecksById('${detail.id}')">重跑检查</button>
         ${canResubmit ? `<button class="btn btn-primary" onclick="resubmitReviewById('${detail.id}')">重新提交</button>` : ''}
       </div>
+      <h3 style="margin:18px 0 8px;font-size:14px">操作时间线</h3>
+      <div style="border:1px solid rgba(148,163,184,.2);border-radius:10px;padding:8px 10px;background:rgba(15,23,42,.25)">${timelineHtml}</div>
       <h3 style="margin:18px 0 8px;font-size:14px">检查明细</h3>
       ${checksHtml}
     `;
