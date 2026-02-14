@@ -340,13 +340,6 @@ function renderV1Domain(c, b) {
       </div>
     </div>
   </div>`;
-  html += `<div class="fade-in" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">
-    <button class="btn btn-outline" onclick="stdDetailId=null;render()">← 返回目录</button>
-    <button class="btn btn-primary" onclick="editStandardFromPrompt('${std.id}')">✏️ 编辑规范</button>
-    <button class="btn btn-outline" onclick="addRuleToStandardPrompt('${std.id}')">+ 新增规则</button>
-    <button class="btn btn-outline" onclick="deleteStandardById('${std.id}')" style="color:var(--red)">🗑 删除规范</button>
-  </div>`;
-
   // Stats
   html += `<div class="stats-row fade-in" style="margin-top:16px">
     <div class="stat-card"><div class="label">系统</div><div class="value" style="color:${d.color}">${systems.length}</div></div>
@@ -1717,6 +1710,12 @@ function renderStandardDetail(c, b, stdId) {
         <div class="attr"><span class="lbl">分类</span><span class="tag tag-general">${std.category}</span></div>
       </div>
     </div>
+  </div>`;
+  html += `<div class="fade-in" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">
+    <button class="btn btn-outline" onclick="stdDetailId=null;switchView('standards')">← 返回目录</button>
+    <button class="btn btn-primary" onclick="editStandardFromPrompt('${std.id}')">✏️ 编辑规范</button>
+    <button class="btn btn-outline" onclick="addRuleToStandardPrompt('${std.id}')">+ 新增规则</button>
+    <button class="btn btn-outline" onclick="deleteStandardById('${std.id}')" style="color:var(--red)">🗑 删除规范</button>
   </div>`;
 
   // Chapters

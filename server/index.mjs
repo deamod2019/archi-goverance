@@ -1893,9 +1893,10 @@ function serveStatic(req, res) {
           return;
         }
         const ext = path.extname(candidate).toLowerCase();
+        const isNoStoreAsset = pathname === '/data.js' || pathname === '/app.js';
         res.writeHead(200, {
           'Content-Type': MIME_TYPES[ext] || 'application/octet-stream',
-          'Cache-Control': pathname === '/data.js' ? 'no-store' : 'public, max-age=300'
+          'Cache-Control': isNoStoreAsset ? 'no-store' : 'public, max-age=300'
         });
         res.end(data);
       });
