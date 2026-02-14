@@ -1427,6 +1427,28 @@ function renderReviewResult(el) {
 }
 
 // ========== Dashboard ==========
+async function rerunReviewChecksById(reviewId) {
+  try {
+    const result = await apiRequest(`/api/v1/reviews/${encodeURIComponent(reviewId)}/compliance-check/run`, { method: 'POST' });
+    alert(`重跑完成：${result.summary?.passed || 0}/${result.summary?.total || 0} 通过`);
+    switchView('dashboard');
+  } catch (error) {
+    alert(`重跑检查失败：${error.message}`);
+  }
+}
+
+async function resubmitReviewById(reviewId) {
+  if (!confirm(`确认重新提交评审 ${reviewId} 吗？`)) return;
+  try {
+    const result = await apiRequest(`/api/v1/reviews/${encodeURIComponent(reviewId)}/resubmit`, { method: 'PUT' });
+    const statusText = result.status === 'REVIEWING' ? '进入评审中' : '退回草稿';
+    alert(`重新提交完成：${statusText}（${result.summary?.passed || 0}/${result.summary?.total || 0}）`);
+    switchView('dashboard');
+  } catch (error) {
+    alert(`重新提交失败：${error.message}`);
+  }
+}
+
 function renderDashboard(c, b) {
   b.innerHTML = '<span onclick="switchView(\'v1\')">架构评审</span> &gt; 评审看板';
   c.innerHTML = '<div class="card fade-in"><div class="card-title">加载中</div><div class="card-desc">正在获取评审数据...</div></div>';
@@ -1443,17 +1465,20 @@ function renderDashboard(c, b) {
         <div class="stat-card"><div class="label">待评审</div><div class="value" style="color:var(--yellow)">${reviewing}</div></div>
         <div class="stat-card"><div class="label">通过率</div><div class="value" style="color:var(--green)">${passRate}%</div></div>
         <div class="stat-card"><div class="label">平均周期</div><div class="value">4.2</div><div class="sub">天</div></div>
-      </div>
-      <h3 style="font-size:15px;margin-bottom:12px" class="fade-in">评审列表</h3>
-      <table class="review-table fade-in"><thead><tr><th>编号</th><th>标题</th><th>类型</th><th>系统</th><th>等级</th><th>申请人</th><th>日期</th><th>状态</th></tr></thead><tbody>`;
-      reviews.forEach(r => {
-        const stCls = r.status === 'REVIEWING' ? 'status-reviewing' : r.status === 'APPROVED' ? 'status-approved' : r.status === 'REJECTED' ? 'status-rejected' : 'status-draft';
-        const stText = r.status === 'REVIEWING' ? '评审中' : r.status === 'APPROVED' ? '已通过' : r.status === 'REJECTED' ? '已驳回' : '草稿';
-        const lvlTag = r.level === 'CORE' ? 'tag-core' : r.level === 'IMPORTANT' ? 'tag-important' : 'tag-general';
-        html += `<tr><td>${r.id}</td><td><strong>${r.title}</strong></td><td>${r.type}</td><td>${r.system || ''}</td><td><span class="tag ${lvlTag}">${r.level || 'GENERAL'}</span></td><td>${r.applicant || ''}</td><td>${r.date}</td><td><span class="status-tag ${stCls}">${stText}</span></td></tr>`;
-      });
-      c.innerHTML = html + '</tbody></table>';
-    })
+	      </div>
+	      <h3 style="font-size:15px;margin-bottom:12px" class="fade-in">评审列表</h3>
+	      <table class="review-table fade-in"><thead><tr><th>编号</th><th>标题</th><th>类型</th><th>系统</th><th>等级</th><th>申请人</th><th>日期</th><th>状态</th><th>操作</th></tr></thead><tbody>`;
+	      reviews.forEach(r => {
+	        const stCls = r.status === 'REVIEWING' ? 'status-reviewing' : r.status === 'APPROVED' ? 'status-approved' : r.status === 'REJECTED' ? 'status-rejected' : 'status-draft';
+	        const stText = r.status === 'REVIEWING' ? '评审中' : r.status === 'APPROVED' ? '已通过' : r.status === 'REJECTED' ? '已驳回' : '草稿';
+	        const lvlTag = r.level === 'CORE' ? 'tag-core' : r.level === 'IMPORTANT' ? 'tag-important' : 'tag-general';
+          const canResubmit = r.status === 'REJECTED' || r.status === 'DRAFT';
+          let actions = `<button class="btn btn-outline" style="padding:4px 8px" onclick="event.stopPropagation();rerunReviewChecksById('${r.id}')">重跑检查</button>`;
+          if (canResubmit) actions += ` <button class="btn btn-primary" style="padding:4px 8px" onclick="event.stopPropagation();resubmitReviewById('${r.id}')">重新提交</button>`;
+	        html += `<tr><td>${r.id}</td><td><strong>${r.title}</strong></td><td>${r.type}</td><td>${r.system || ''}</td><td><span class="tag ${lvlTag}">${r.level || 'GENERAL'}</span></td><td>${r.applicant || ''}</td><td>${r.date}</td><td><span class="status-tag ${stCls}">${stText}</span></td><td style="white-space:nowrap">${actions}</td></tr>`;
+	      });
+	      c.innerHTML = html + '</tbody></table>';
+	    })
     .catch((error) => {
       c.innerHTML = `<div class="card fade-in" style="border-left:3px solid var(--red)"><div class="card-title">加载失败</div><div class="card-desc">${error.message}</div></div>`;
     });

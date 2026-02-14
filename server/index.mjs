@@ -1816,6 +1816,61 @@ async function evaluateCompliance(reviewRow) {
   return checks;
 }
 
+function summarizeReviewChecks(checks) {
+  return {
+    total: checks.length,
+    passed: checks.filter((c) => c.passed).length,
+    failed: checks.filter((c) => !c.passed).length
+  };
+}
+
+async function loadReviewRowOrThrow(reviewId, queryable = pool) {
+  const result = await queryable.query('SELECT * FROM reviews WHERE id = $1', [reviewId]);
+  if (!result.rows.length) throw new HttpError(404, 'review not found');
+  return result.rows[0];
+}
+
+async function replaceReviewChecks(client, reviewId, checks) {
+  await client.query('DELETE FROM review_checks WHERE review_id = $1', [reviewId]);
+  for (const check of checks) {
+    await client.query(
+      'INSERT INTO review_checks (review_id, rule_id, passed, severity, message) VALUES ($1, $2, $3, $4, $5)',
+      [reviewId, check.ruleId, check.passed, check.severity, check.message]
+    );
+  }
+}
+
+async function runReviewCompliance(reviewId, options = {}) {
+  const { updateStatus = true, allowedStatuses = null } = options;
+  const review = await loadReviewRowOrThrow(reviewId);
+
+  if (Array.isArray(allowedStatuses) && allowedStatuses.length > 0 && !allowedStatuses.includes(review.status)) {
+    throw new HttpError(409, `review status '${review.status}' cannot run this action`);
+  }
+
+  const checks = await evaluateCompliance(review);
+  const hasCriticalFail = checks.some((c) => !c.passed && c.severity === 'CRITICAL');
+  const nextStatus = updateStatus ? (hasCriticalFail ? 'DRAFT' : 'REVIEWING') : review.status;
+
+  await withTransaction(async (client) => {
+    await replaceReviewChecks(client, reviewId, checks);
+    if (updateStatus) {
+      await client.query('UPDATE reviews SET status = $2, updated_at = now() WHERE id = $1', [reviewId, nextStatus]);
+    } else {
+      await client.query('UPDATE reviews SET updated_at = now() WHERE id = $1', [reviewId]);
+    }
+  });
+
+  return {
+    reviewId,
+    previousStatus: review.status,
+    status: nextStatus,
+    blocked: hasCriticalFail,
+    summary: summarizeReviewChecks(checks),
+    checks
+  };
+}
+
 function sendJson(res, statusCode, data) {
   const body = JSON.stringify(data);
   res.writeHead(statusCode, {
@@ -3154,50 +3209,43 @@ async function handleApi(req, res, url) {
     return true;
   }
 
+  const reviewDetailMatch = url.pathname.match(/^\/api\/v1\/reviews\/([^/]+)$/);
+  if (req.method === 'GET' && reviewDetailMatch) {
+    const reviewId = decodeURIComponent(reviewDetailMatch[1]);
+    const fields = resolveProjectionFields(url, REVIEW_PROJECTIONS);
+    const includeChecksRaw = String(url.searchParams.get('include_checks') || 'true').trim().toLowerCase();
+    const includeChecks = !['0', 'false', 'no'].includes(includeChecksRaw);
+    const review = await loadReviewRowOrThrow(reviewId);
+    const dto = toReviewDto(review);
+
+    if (includeChecks) {
+      const { rows } = await pool.query(
+        'SELECT rule_id, passed, severity, message FROM review_checks WHERE review_id = $1 ORDER BY id ASC',
+        [reviewId]
+      );
+      dto.checks = rows.map((row) => ({ ruleId: row.rule_id, passed: row.passed, severity: row.severity, message: row.message }));
+    }
+
+    sendJson(res, 200, projectData(dto, fields));
+    return true;
+  }
+
   const reviewSubmitMatch = url.pathname.match(/^\/api\/v1\/reviews\/([^/]+)\/submit$/);
   if (req.method === 'PUT' && reviewSubmitMatch) {
     const reviewId = decodeURIComponent(reviewSubmitMatch[1]);
-    const reviewRes = await pool.query('SELECT * FROM reviews WHERE id = $1', [reviewId]);
-    if (!reviewRes.rows.length) {
-      sendJson(res, 404, { error: 'not_found', message: 'review not found' });
-      return true;
-    }
+    const result = await runReviewCompliance(reviewId, { updateStatus: true });
+    sendJson(res, 200, result);
+    return true;
+  }
 
-    const review = reviewRes.rows[0];
-    const checks = await evaluateCompliance(review);
-    const hasCriticalFail = checks.some((c) => !c.passed && c.severity === 'CRITICAL');
-    const nextStatus = hasCriticalFail ? 'DRAFT' : 'REVIEWING';
-
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query('DELETE FROM review_checks WHERE review_id = $1', [reviewId]);
-      for (const check of checks) {
-        await client.query(
-          'INSERT INTO review_checks (review_id, rule_id, passed, severity, message) VALUES ($1, $2, $3, $4, $5)',
-          [reviewId, check.ruleId, check.passed, check.severity, check.message]
-        );
-      }
-      await client.query('UPDATE reviews SET status = $2, updated_at = now() WHERE id = $1', [reviewId, nextStatus]);
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-
-    sendJson(res, 200, {
-      reviewId,
-      status: nextStatus,
-      blocked: hasCriticalFail,
-      summary: {
-        total: checks.length,
-        passed: checks.filter((c) => c.passed).length,
-        failed: checks.filter((c) => !c.passed).length
-      },
-      checks
+  const reviewResubmitMatch = url.pathname.match(/^\/api\/v1\/reviews\/([^/]+)\/resubmit$/);
+  if (req.method === 'PUT' && reviewResubmitMatch) {
+    const reviewId = decodeURIComponent(reviewResubmitMatch[1]);
+    const result = await runReviewCompliance(reviewId, {
+      updateStatus: true,
+      allowedStatuses: ['DRAFT', 'REJECTED']
     });
+    sendJson(res, 200, result);
     return true;
   }
 
@@ -3209,6 +3257,14 @@ async function handleApi(req, res, url) {
       [reviewId]
     );
     sendJson(res, 200, rows.map((row) => ({ ruleId: row.rule_id, passed: row.passed, severity: row.severity, message: row.message })));
+    return true;
+  }
+
+  const reviewChecksRunMatch = url.pathname.match(/^\/api\/v1\/reviews\/([^/]+)\/compliance-check\/run$/);
+  if (req.method === 'POST' && reviewChecksRunMatch) {
+    const reviewId = decodeURIComponent(reviewChecksRunMatch[1]);
+    const result = await runReviewCompliance(reviewId, { updateStatus: false });
+    sendJson(res, 200, { ...result, rerun: true });
     return true;
   }
 

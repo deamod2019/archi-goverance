@@ -817,6 +817,26 @@ paths:
       responses:
         '201': { description: Review created }
 
+  /api/v1/reviews/{id}:
+    get:
+      summary: Get review detail
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: projection
+          schema: { type: string, enum: [full, summary] }
+        - in: query
+          name: fields
+          schema: { type: string, description: Comma-separated field projection paths }
+        - in: query
+          name: include_checks
+          schema: { type: string, description: true/false (default true) }
+      responses:
+        '200': { description: Review detail }
+
   /api/v1/reviews/{id}/submit:
     put:
       summary: Submit review and run compliance checks
@@ -828,6 +848,17 @@ paths:
       responses:
         '200': { description: Submit result }
 
+  /api/v1/reviews/{id}/resubmit:
+    put:
+      summary: Resubmit review and run compliance checks
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Resubmit result }
+
   /api/v1/reviews/{id}/compliance-check:
     get:
       summary: List compliance checks for review
@@ -838,6 +869,17 @@ paths:
           schema: { type: string }
       responses:
         '200': { description: Compliance checks }
+
+  /api/v1/reviews/{id}/compliance-check/run:
+    post:
+      summary: Re-run compliance checks for review
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Compliance re-run result }
 
   /api/v1/reviews/{id}/approve:
     put:
