@@ -683,8 +683,9 @@ const server = http.createServer(async (req, res) => {
 });
 
 async function start() {
-  if (IS_RENDER && !DATABASE_URL) {
-    throw new Error('DATABASE_URL is not set. On Render, bind a Postgres database and expose connectionString to DATABASE_URL.');
+  const hasPgParts = !!(process.env.PGHOST && process.env.PGUSER && process.env.PGDATABASE);
+  if (IS_RENDER && !DATABASE_URL && !hasPgParts) {
+    throw new Error('Database config is missing. Set DATABASE_URL, or set PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE on Render.');
   }
 
   let lastError = null;
