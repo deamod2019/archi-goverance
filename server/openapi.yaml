@@ -477,6 +477,46 @@ paths:
       responses:
         '200': { description: Data center list }
 
+  /api/v1/panorama/data-centers:
+    get:
+      summary: List data centers
+      responses:
+        '200': { description: Data center list }
+    post:
+      summary: Create data center
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created data center }
+
+  /api/v1/panorama/data-centers/{id}:
+    put:
+      summary: Update data center
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated data center }
+    delete:
+      summary: Delete data center
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Delete result }
+
   /api/v1/panorama/applications/{id}/deployment-topology:
     get:
       summary: Get deployment topology of application
@@ -640,6 +680,40 @@ paths:
       summary: List load balancer domains
       responses:
         '200': { description: LB domain list }
+    post:
+      summary: Create load balancer domain
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created LB domain }
+
+  /api/v1/panorama/lb-domains/{id}:
+    put:
+      summary: Update load balancer domain
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated LB domain }
+    delete:
+      summary: Delete load balancer domain
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Delete result }
 
   /api/v1/panorama/otel-services:
     get:
@@ -650,6 +724,40 @@ paths:
           schema: { type: string }
       responses:
         '200': { description: OTel service list }
+    post:
+      summary: Create OTel service
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created OTel service }
+
+  /api/v1/panorama/otel-services/{id}:
+    put:
+      summary: Update OTel service
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated OTel service }
+    delete:
+      summary: Delete OTel service
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Delete result }
 
   /api/v1/panorama/otel-services/{id}/instances:
     get:
@@ -661,6 +769,166 @@ paths:
           schema: { type: string }
       responses:
         '200': { description: OTel instance list }
+
+  /api/v1/panorama/artifacts:
+    get:
+      summary: List panorama artifacts
+      responses:
+        '200': { description: Artifact list }
+    post:
+      summary: Create panorama artifact
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created artifact }
+
+  /api/v1/panorama/artifacts/{id}:
+    put:
+      summary: Update panorama artifact
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated artifact }
+    delete:
+      summary: Delete panorama artifact
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Delete result }
+
+  /api/v1/panorama/data-objects:
+    get:
+      summary: List panorama data objects
+      responses:
+        '200': { description: Data object list }
+    post:
+      summary: Create panorama data object
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created data object }
+
+  /api/v1/panorama/data-objects/{id}:
+    put:
+      summary: Update panorama data object
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated data object }
+    delete:
+      summary: Delete panorama data object
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Delete result }
+
+  /api/v1/panorama/api-groups:
+    get:
+      summary: List panorama API groups
+      responses:
+        '200': { description: API group list }
+    post:
+      summary: Create panorama API group
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created API group }
+
+  /api/v1/panorama/api-groups/{id}:
+    put:
+      summary: Update panorama API group
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated API group }
+    delete:
+      summary: Delete panorama API group
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Delete result }
+
+  /api/v1/panorama/api-endpoints:
+    get:
+      summary: List panorama API endpoints
+      responses:
+        '200': { description: API endpoint list }
+    post:
+      summary: Create panorama API endpoint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created API endpoint }
+
+  /api/v1/panorama/api-endpoints/{id}:
+    put:
+      summary: Update panorama API endpoint
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated API endpoint }
+    delete:
+      summary: Delete panorama API endpoint
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Delete result }
 
   /api/v1/panorama/tech-radar:
     get:

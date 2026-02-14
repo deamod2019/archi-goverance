@@ -1873,6 +1873,195 @@ function normalizeMwClusterInput(raw, fallbackId) {
   return { id, name, type, product, instances, producers, consumers, health };
 }
 
+function normalizeDataCenterInput(raw, fallbackId) {
+  const id = String(raw?.id || fallbackId || '').trim();
+  const name = String(raw?.name || '').trim();
+  if (!id) throw new HttpError(400, 'data center id is required');
+  if (!name) throw new HttpError(400, 'data center name is required');
+  return {
+    id,
+    name,
+    apps: normalizeNonNegativeInt(raw?.apps, 'dataCenter.apps', 0),
+    vms: normalizeNonNegativeInt(raw?.vms, 'dataCenter.vms', 0),
+    containers: normalizeNonNegativeInt(raw?.containers, 'dataCenter.containers', 0),
+    servers: normalizeNonNegativeInt(raw?.servers, 'dataCenter.servers', 0),
+    usage: normalizePercent(raw?.usage, 'dataCenter.usage', 0)
+  };
+}
+
+function normalizeLbDomainInput(raw, fallbackId) {
+  const id = String(raw?.id || raw?.domainId || fallbackId || '').trim();
+  const domainName = String(raw?.domainName || raw?.domain || '').trim();
+  const domainType = String(raw?.domainType || 'INTERNAL').trim().toUpperCase();
+  const vip = String(raw?.vip || '').trim();
+  const lbDevice = String(raw?.lbDevice || '').trim() || 'F5-PROD-01';
+  const sslCertExpire = normalizeDateValue(raw?.sslCertExpire, 'lbDomain.sslCertExpire', '2027-12-31');
+  const poolId = String(raw?.poolId || '').trim();
+  const poolName = String(raw?.poolName || `${domainName}-pool`).trim();
+  const backends = Array.isArray(raw?.backends) ? raw.backends : [];
+  if (!id) throw new HttpError(400, 'lb domain id is required');
+  if (!domainName) throw new HttpError(400, 'lb domain domainName is required');
+  if (!vip) throw new HttpError(400, 'lb domain vip is required');
+  if (!['INTERNAL', 'EXTERNAL'].includes(domainType)) {
+    throw new HttpError(400, 'lb domain domainType must be one of: INTERNAL, EXTERNAL');
+  }
+  const normalizedBackends = backends.map((item, idx) => {
+    const endpoint = String(item?.endpoint || '').trim();
+    const app = String(item?.app || '').trim();
+    const status = normalizeEnum(item?.status, `lbDomain.backends[${idx}].status`, ['RUNNING', 'OFFLINE'], 'RUNNING');
+    const weight = normalizeNonNegativeInt(item?.weight, `lbDomain.backends[${idx}].weight`, 100);
+    if (!endpoint) throw new HttpError(400, `lbDomain.backends[${idx}].endpoint is required`);
+    return { endpoint, app, status, weight };
+  });
+  return {
+    id,
+    payload: { domainId: id, domainName, domainType, vip, sslCertExpire, lbDevice },
+    pool: {
+      poolId: poolId || `lb-pool-${toStableId('p', domainName).replace(/^p-/, '')}`,
+      poolName,
+      vip,
+      lbAlgorithm: String(raw?.lbAlgorithm || 'ROUND_ROBIN').trim().toUpperCase(),
+      healthCheckType: String(raw?.healthCheckType || 'HTTP').trim().toUpperCase(),
+      healthCheckPath: String(raw?.healthCheckPath || '/health').trim()
+    },
+    backends: normalizedBackends
+  };
+}
+
+function normalizeOtelServiceInput(raw, fallbackId) {
+  const id = String(raw?.id || raw?.serviceName || fallbackId || '').trim();
+  const appId = String(raw?.appId || '').trim();
+  const serviceName = String(raw?.serviceName || id).trim();
+  const serviceNamespace = String(raw?.serviceNamespace || 'default').trim();
+  const serviceVersion = String(raw?.serviceVersion || '1.0.0').trim();
+  const discoveredAt = normalizeDateValue(raw?.discoveredAt, 'otelService.discoveredAt');
+  if (!id) throw new HttpError(400, 'otel service id is required');
+  if (!appId) throw new HttpError(400, 'otel service appId is required');
+  return {
+    id,
+    appId,
+    payload: { serviceName, appId, serviceNamespace, serviceVersion, discoveredAt }
+  };
+}
+
+function normalizeArtifactInput(raw, fallbackId) {
+  const id = String(raw?.id || raw?.artifactId || fallbackId || '').trim();
+  const appId = String(raw?.appId || '').trim();
+  const artifactType = String(raw?.artifactType || 'DOCKER_IMAGE').trim().toUpperCase();
+  const version = String(raw?.version || '').trim();
+  const registryUrl = String(raw?.registryUrl || '').trim();
+  const buildPipelineId = String(raw?.buildPipelineId || '').trim();
+  const status = String(raw?.status || 'ACTIVE').trim().toUpperCase();
+  if (!id) throw new HttpError(400, 'artifact id is required');
+  if (!appId) throw new HttpError(400, 'artifact appId is required');
+  if (!['DOCKER_IMAGE', 'JAR', 'NPM_PACKAGE', 'HELM_CHART', 'BINARY'].includes(artifactType)) {
+    throw new HttpError(400, 'artifact artifactType must be one of: DOCKER_IMAGE, JAR, NPM_PACKAGE, HELM_CHART, BINARY');
+  }
+  if (!version) throw new HttpError(400, 'artifact version is required');
+  if (!['ACTIVE', 'INACTIVE'].includes(status)) {
+    throw new HttpError(400, 'artifact status must be one of: ACTIVE, INACTIVE');
+  }
+  return {
+    id,
+    appId,
+    payload: {
+      artifactId: id,
+      appId,
+      artifactType,
+      version,
+      registryUrl,
+      buildPipelineId,
+      status
+    }
+  };
+}
+
+function normalizeDataObjectInput(raw, fallbackId) {
+  const id = String(raw?.id || raw?.dataObjectId || fallbackId || '').trim();
+  const appId = String(raw?.appId || '').trim();
+  const logicalEntityIdRaw = raw?.logicalEntityId == null ? '' : String(raw.logicalEntityId).trim();
+  const objectName = String(raw?.objectName || '').trim();
+  const storageType = String(raw?.storageType || 'TABLE').trim().toUpperCase();
+  const criticality = String(raw?.criticality || 'MEDIUM').trim().toUpperCase();
+  if (!id) throw new HttpError(400, 'data object id is required');
+  if (!appId) throw new HttpError(400, 'data object appId is required');
+  if (!objectName) throw new HttpError(400, 'data object objectName is required');
+  if (!['TABLE', 'FILE', 'TOPIC', 'CACHE', 'OBJECT'].includes(storageType)) {
+    throw new HttpError(400, 'data object storageType must be one of: TABLE, FILE, TOPIC, CACHE, OBJECT');
+  }
+  if (!['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'].includes(criticality)) {
+    throw new HttpError(400, 'data object criticality must be one of: LOW, MEDIUM, HIGH, CRITICAL');
+  }
+  const logicalEntityId = logicalEntityIdRaw || null;
+  return {
+    id,
+    appId,
+    logicalEntityId,
+    payload: {
+      dataObjectId: id,
+      appId,
+      logicalEntityId,
+      objectName,
+      storageType,
+      criticality
+    }
+  };
+}
+
+function normalizeApiGroupInput(raw, fallbackId) {
+  const id = String(raw?.id || raw?.groupId || fallbackId || '').trim();
+  const appId = String(raw?.appId || '').trim();
+  const groupName = String(raw?.groupName || '').trim();
+  const protocol = String(raw?.protocol || 'REST').trim().toUpperCase();
+  if (!id) throw new HttpError(400, 'api group id is required');
+  if (!appId) throw new HttpError(400, 'api group appId is required');
+  if (!groupName) throw new HttpError(400, 'api group groupName is required');
+  if (!['REST', 'HTTP', 'GRPC', 'RPC', 'MQ', 'GRAPHQL', 'SOAP'].includes(protocol)) {
+    throw new HttpError(400, 'api group protocol must be one of: REST, HTTP, GRPC, RPC, MQ, GRAPHQL, SOAP');
+  }
+  return {
+    id,
+    appId,
+    payload: {
+      groupId: id,
+      appId,
+      groupName,
+      protocol
+    }
+  };
+}
+
+function normalizeApiEndpointInput(raw, fallbackId) {
+  const id = String(raw?.id || raw?.endpointId || fallbackId || '').trim();
+  const groupId = String(raw?.groupId || '').trim();
+  const path = String(raw?.path || '').trim();
+  const method = String(raw?.method || 'GET').trim().toUpperCase();
+  const protocol = String(raw?.protocol || 'HTTP').trim().toUpperCase();
+  const security = String(raw?.security || 'INTERNAL').trim().toUpperCase();
+  if (!id) throw new HttpError(400, 'api endpoint id is required');
+  if (!groupId) throw new HttpError(400, 'api endpoint groupId is required');
+  if (!path) throw new HttpError(400, 'api endpoint path is required');
+  if (!path.startsWith('/')) throw new HttpError(400, 'api endpoint path must start with /');
+  if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    throw new HttpError(400, 'api endpoint method must be one of: GET, POST, PUT, PATCH, DELETE');
+  }
+  if (!['HTTP', 'HTTPS', 'GRPC', 'MQ', 'TCP'].includes(protocol)) {
+    throw new HttpError(400, 'api endpoint protocol must be one of: HTTP, HTTPS, GRPC, MQ, TCP');
+  }
+  return {
+    id,
+    groupId,
+    payload: {
+      endpointId: id,
+      groupId,
+      path,
+      method,
+      protocol,
+      security
+    }
+  };
+}
+
 async function resolveDependencyNodePayload(client, nodeId) {
   const existing = await client.query('SELECT payload FROM dependency_nodes WHERE id = $1', [nodeId]);
   if (existing.rows.length) {
@@ -3466,6 +3655,349 @@ async function handleApi(req, res, url) {
     return true;
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/artifacts') {
+    const { rows } = await pool.query(
+      `
+      SELECT ar.id, ar.app_id, ar.payload, ap.payload AS app_payload
+      FROM artifacts ar
+      JOIN applications ap ON ap.id = ar.app_id
+      ORDER BY ar.id
+      `
+    );
+    sendJson(
+      res,
+      200,
+      rows.map((row) => ({
+        ...row.payload,
+        id: row.id,
+        artifactId: row.id,
+        appId: row.app_id,
+        appName: row.app_payload?.name || null
+      }))
+    );
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/panorama/artifacts') {
+    const body = await readJsonBody(req);
+    const artifact = normalizeArtifactInput(body);
+    const appRes = await pool.query('SELECT 1 FROM applications WHERE id = $1', [artifact.appId]);
+    if (!appRes.rows.length) throw new HttpError(400, `application '${artifact.appId}' does not exist`);
+    try {
+      await pool.query('INSERT INTO artifacts (id, app_id, payload) VALUES ($1, $2, $3::jsonb)', [
+        artifact.id,
+        artifact.appId,
+        JSON.stringify(artifact.payload)
+      ]);
+    } catch (error) {
+      if (String(error.code) === '23505') throw new HttpError(409, `artifact '${artifact.id}' already exists`);
+      throw error;
+    }
+    sendJson(res, 201, { id: artifact.id, ...artifact.payload });
+    return true;
+  }
+
+  const artifactItemMatch = url.pathname.match(/^\/api\/v1\/panorama\/artifacts\/([^/]+)$/);
+  if (req.method === 'PUT' && artifactItemMatch) {
+    const artifactId = decodeURIComponent(artifactItemMatch[1]);
+    const body = await readJsonBody(req);
+    const current = await pool.query('SELECT app_id, payload FROM artifacts WHERE id = $1', [artifactId]);
+    if (!current.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'artifact not found' });
+      return true;
+    }
+    const merged = {
+      ...current.rows[0].payload,
+      ...body,
+      id: artifactId,
+      artifactId,
+      appId: body?.appId != null ? body.appId : current.rows[0].app_id
+    };
+    const artifact = normalizeArtifactInput(merged, artifactId);
+    const appRes = await pool.query('SELECT 1 FROM applications WHERE id = $1', [artifact.appId]);
+    if (!appRes.rows.length) throw new HttpError(400, `application '${artifact.appId}' does not exist`);
+    await pool.query('UPDATE artifacts SET app_id = $2, payload = $3::jsonb, updated_at = now() WHERE id = $1', [
+      artifactId,
+      artifact.appId,
+      JSON.stringify(artifact.payload)
+    ]);
+    sendJson(res, 200, { id: artifactId, ...artifact.payload });
+    return true;
+  }
+
+  if (req.method === 'DELETE' && artifactItemMatch) {
+    const artifactId = decodeURIComponent(artifactItemMatch[1]);
+    const deleted = await pool.query('DELETE FROM artifacts WHERE id = $1 RETURNING id', [artifactId]);
+    if (!deleted.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'artifact not found' });
+      return true;
+    }
+    sendJson(res, 200, { id: artifactId, deleted: true });
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/data-objects') {
+    const { rows } = await pool.query(
+      `
+      SELECT d.id, d.app_id, d.logical_entity_id, d.payload,
+             a.payload AS app_payload,
+             le.payload AS logical_entity_payload
+      FROM data_objects d
+      JOIN applications a ON a.id = d.app_id
+      LEFT JOIN logical_entities le ON le.id = d.logical_entity_id
+      ORDER BY d.id
+      `
+    );
+    sendJson(
+      res,
+      200,
+      rows.map((row) => ({
+        ...row.payload,
+        id: row.id,
+        dataObjectId: row.id,
+        appId: row.app_id,
+        appName: row.app_payload?.name || null,
+        logicalEntityId: row.logical_entity_id || null,
+        logicalEntityName: row.logical_entity_payload?.entityName || null
+      }))
+    );
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/panorama/data-objects') {
+    const body = await readJsonBody(req);
+    const dataObject = normalizeDataObjectInput(body);
+    const appRes = await pool.query('SELECT 1 FROM applications WHERE id = $1', [dataObject.appId]);
+    if (!appRes.rows.length) throw new HttpError(400, `application '${dataObject.appId}' does not exist`);
+    if (dataObject.logicalEntityId) {
+      const logicalRes = await pool.query('SELECT 1 FROM logical_entities WHERE id = $1', [dataObject.logicalEntityId]);
+      if (!logicalRes.rows.length) throw new HttpError(400, `logical entity '${dataObject.logicalEntityId}' does not exist`);
+    }
+    try {
+      await pool.query(
+        'INSERT INTO data_objects (id, app_id, logical_entity_id, payload) VALUES ($1, $2, $3, $4::jsonb)',
+        [dataObject.id, dataObject.appId, dataObject.logicalEntityId, JSON.stringify(dataObject.payload)]
+      );
+    } catch (error) {
+      if (String(error.code) === '23505') throw new HttpError(409, `data object '${dataObject.id}' already exists`);
+      throw error;
+    }
+    sendJson(res, 201, { id: dataObject.id, ...dataObject.payload });
+    return true;
+  }
+
+  const dataObjectItemMatch = url.pathname.match(/^\/api\/v1\/panorama\/data-objects\/([^/]+)$/);
+  if (req.method === 'PUT' && dataObjectItemMatch) {
+    const dataObjectId = decodeURIComponent(dataObjectItemMatch[1]);
+    const body = await readJsonBody(req);
+    const current = await pool.query('SELECT app_id, logical_entity_id, payload FROM data_objects WHERE id = $1', [dataObjectId]);
+    if (!current.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'data object not found' });
+      return true;
+    }
+    const merged = {
+      ...current.rows[0].payload,
+      ...body,
+      id: dataObjectId,
+      dataObjectId,
+      appId: body?.appId != null ? body.appId : current.rows[0].app_id,
+      logicalEntityId: body?.logicalEntityId != null ? body.logicalEntityId : current.rows[0].logical_entity_id
+    };
+    const dataObject = normalizeDataObjectInput(merged, dataObjectId);
+    const appRes = await pool.query('SELECT 1 FROM applications WHERE id = $1', [dataObject.appId]);
+    if (!appRes.rows.length) throw new HttpError(400, `application '${dataObject.appId}' does not exist`);
+    if (dataObject.logicalEntityId) {
+      const logicalRes = await pool.query('SELECT 1 FROM logical_entities WHERE id = $1', [dataObject.logicalEntityId]);
+      if (!logicalRes.rows.length) throw new HttpError(400, `logical entity '${dataObject.logicalEntityId}' does not exist`);
+    }
+    await pool.query(
+      'UPDATE data_objects SET app_id = $2, logical_entity_id = $3, payload = $4::jsonb, updated_at = now() WHERE id = $1',
+      [dataObjectId, dataObject.appId, dataObject.logicalEntityId, JSON.stringify(dataObject.payload)]
+    );
+    sendJson(res, 200, { id: dataObjectId, ...dataObject.payload });
+    return true;
+  }
+
+  if (req.method === 'DELETE' && dataObjectItemMatch) {
+    const dataObjectId = decodeURIComponent(dataObjectItemMatch[1]);
+    const deleted = await pool.query('DELETE FROM data_objects WHERE id = $1 RETURNING id', [dataObjectId]);
+    if (!deleted.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'data object not found' });
+      return true;
+    }
+    sendJson(res, 200, { id: dataObjectId, deleted: true });
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/api-groups') {
+    const { rows } = await pool.query(
+      `
+      SELECT g.id, g.app_id, g.payload, a.payload AS app_payload
+      FROM api_groups g
+      JOIN applications a ON a.id = g.app_id
+      ORDER BY g.id
+      `
+    );
+    sendJson(
+      res,
+      200,
+      rows.map((row) => ({
+        ...row.payload,
+        id: row.id,
+        groupId: row.id,
+        appId: row.app_id,
+        appName: row.app_payload?.name || null
+      }))
+    );
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/panorama/api-groups') {
+    const body = await readJsonBody(req);
+    const group = normalizeApiGroupInput(body);
+    const appRes = await pool.query('SELECT 1 FROM applications WHERE id = $1', [group.appId]);
+    if (!appRes.rows.length) throw new HttpError(400, `application '${group.appId}' does not exist`);
+    try {
+      await pool.query('INSERT INTO api_groups (id, app_id, payload) VALUES ($1, $2, $3::jsonb)', [
+        group.id,
+        group.appId,
+        JSON.stringify(group.payload)
+      ]);
+    } catch (error) {
+      if (String(error.code) === '23505') throw new HttpError(409, `api group '${group.id}' already exists`);
+      throw error;
+    }
+    sendJson(res, 201, { id: group.id, ...group.payload });
+    return true;
+  }
+
+  const apiGroupItemMatch = url.pathname.match(/^\/api\/v1\/panorama\/api-groups\/([^/]+)$/);
+  if (req.method === 'PUT' && apiGroupItemMatch) {
+    const groupId = decodeURIComponent(apiGroupItemMatch[1]);
+    const body = await readJsonBody(req);
+    const current = await pool.query('SELECT app_id, payload FROM api_groups WHERE id = $1', [groupId]);
+    if (!current.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'api group not found' });
+      return true;
+    }
+    const merged = {
+      ...current.rows[0].payload,
+      ...body,
+      id: groupId,
+      groupId,
+      appId: body?.appId != null ? body.appId : current.rows[0].app_id
+    };
+    const group = normalizeApiGroupInput(merged, groupId);
+    const appRes = await pool.query('SELECT 1 FROM applications WHERE id = $1', [group.appId]);
+    if (!appRes.rows.length) throw new HttpError(400, `application '${group.appId}' does not exist`);
+    await pool.query('UPDATE api_groups SET app_id = $2, payload = $3::jsonb, updated_at = now() WHERE id = $1', [
+      groupId,
+      group.appId,
+      JSON.stringify(group.payload)
+    ]);
+    sendJson(res, 200, { id: groupId, ...group.payload });
+    return true;
+  }
+
+  if (req.method === 'DELETE' && apiGroupItemMatch) {
+    const groupId = decodeURIComponent(apiGroupItemMatch[1]);
+    const summaryRes = await pool.query('SELECT COUNT(*)::int AS endpoints FROM api_endpoints WHERE group_id = $1', [groupId]);
+    const deleted = await pool.query('DELETE FROM api_groups WHERE id = $1 RETURNING id', [groupId]);
+    if (!deleted.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'api group not found' });
+      return true;
+    }
+    sendJson(res, 200, { id: groupId, deleted: true, cascade: summaryRes.rows[0] || {} });
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/api-endpoints') {
+    const { rows } = await pool.query(
+      `
+      SELECT ep.id, ep.group_id, ep.payload,
+             g.payload AS group_payload,
+             g.app_id,
+             a.payload AS app_payload
+      FROM api_endpoints ep
+      JOIN api_groups g ON g.id = ep.group_id
+      JOIN applications a ON a.id = g.app_id
+      ORDER BY ep.id
+      `
+    );
+    sendJson(
+      res,
+      200,
+      rows.map((row) => ({
+        ...row.payload,
+        id: row.id,
+        endpointId: row.id,
+        groupId: row.group_id,
+        groupName: row.group_payload?.groupName || null,
+        appId: row.app_id,
+        appName: row.app_payload?.name || null
+      }))
+    );
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/panorama/api-endpoints') {
+    const body = await readJsonBody(req);
+    const endpoint = normalizeApiEndpointInput(body);
+    const groupRes = await pool.query('SELECT 1 FROM api_groups WHERE id = $1', [endpoint.groupId]);
+    if (!groupRes.rows.length) throw new HttpError(400, `api group '${endpoint.groupId}' does not exist`);
+    try {
+      await pool.query('INSERT INTO api_endpoints (id, group_id, payload) VALUES ($1, $2, $3::jsonb)', [
+        endpoint.id,
+        endpoint.groupId,
+        JSON.stringify(endpoint.payload)
+      ]);
+    } catch (error) {
+      if (String(error.code) === '23505') throw new HttpError(409, `api endpoint '${endpoint.id}' already exists`);
+      throw error;
+    }
+    sendJson(res, 201, { id: endpoint.id, ...endpoint.payload });
+    return true;
+  }
+
+  const apiEndpointItemMatch = url.pathname.match(/^\/api\/v1\/panorama\/api-endpoints\/([^/]+)$/);
+  if (req.method === 'PUT' && apiEndpointItemMatch) {
+    const endpointId = decodeURIComponent(apiEndpointItemMatch[1]);
+    const body = await readJsonBody(req);
+    const current = await pool.query('SELECT group_id, payload FROM api_endpoints WHERE id = $1', [endpointId]);
+    if (!current.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'api endpoint not found' });
+      return true;
+    }
+    const merged = {
+      ...current.rows[0].payload,
+      ...body,
+      id: endpointId,
+      endpointId,
+      groupId: body?.groupId != null ? body.groupId : current.rows[0].group_id
+    };
+    const endpoint = normalizeApiEndpointInput(merged, endpointId);
+    const groupRes = await pool.query('SELECT 1 FROM api_groups WHERE id = $1', [endpoint.groupId]);
+    if (!groupRes.rows.length) throw new HttpError(400, `api group '${endpoint.groupId}' does not exist`);
+    await pool.query('UPDATE api_endpoints SET group_id = $2, payload = $3::jsonb, updated_at = now() WHERE id = $1', [
+      endpointId,
+      endpoint.groupId,
+      JSON.stringify(endpoint.payload)
+    ]);
+    sendJson(res, 200, { id: endpointId, ...endpoint.payload });
+    return true;
+  }
+
+  if (req.method === 'DELETE' && apiEndpointItemMatch) {
+    const endpointId = decodeURIComponent(apiEndpointItemMatch[1]);
+    const deleted = await pool.query('DELETE FROM api_endpoints WHERE id = $1 RETURNING id', [endpointId]);
+    if (!deleted.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'api endpoint not found' });
+      return true;
+    }
+    sendJson(res, 200, { id: endpointId, deleted: true });
+    return true;
+  }
+
   const appRuntimeMatch = url.pathname.match(/^\/api\/v1\/panorama\/applications\/([^/]+)\/runtime$/);
   if (req.method === 'GET' && appRuntimeMatch) {
     const appId = decodeURIComponent(appRuntimeMatch[1]);
@@ -3576,6 +4108,60 @@ async function handleApi(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/v1/panorama/data-centers/summary') {
     const { rows } = await pool.query('SELECT payload FROM data_centers ORDER BY payload->>\'name\'');
     sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/data-centers') {
+    const { rows } = await pool.query('SELECT payload FROM data_centers ORDER BY payload->>\'name\'');
+    sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/panorama/data-centers') {
+    const body = await readJsonBody(req);
+    const dc = normalizeDataCenterInput(body);
+    try {
+      await pool.query('INSERT INTO data_centers (id, payload) VALUES ($1, $2::jsonb)', [dc.id, JSON.stringify(dc)]);
+    } catch (error) {
+      if (String(error.code) === '23505') throw new HttpError(409, `data center '${dc.id}' already exists`);
+      throw error;
+    }
+    sendJson(res, 201, dc);
+    return true;
+  }
+
+  const dcItemMatch = url.pathname.match(/^\/api\/v1\/panorama\/data-centers\/([^/]+)$/);
+  if (req.method === 'PUT' && dcItemMatch) {
+    const dcId = decodeURIComponent(dcItemMatch[1]);
+    const body = await readJsonBody(req);
+    const current = await pool.query('SELECT payload FROM data_centers WHERE id = $1', [dcId]);
+    if (!current.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'data center not found' });
+      return true;
+    }
+    const merged = { ...current.rows[0].payload, ...body, id: dcId };
+    const next = normalizeDataCenterInput(merged, dcId);
+    await pool.query('UPDATE data_centers SET payload = $2::jsonb, updated_at = now() WHERE id = $1', [dcId, JSON.stringify(next)]);
+    sendJson(res, 200, next);
+    return true;
+  }
+
+  if (req.method === 'DELETE' && dcItemMatch) {
+    const dcId = decodeURIComponent(dcItemMatch[1]);
+    const summaryRes = await pool.query(
+      `
+      SELECT
+        (SELECT COUNT(*)::int FROM machine_rooms WHERE dc_id = $1) AS machine_rooms,
+        (SELECT COUNT(*)::int FROM virtual_machines WHERE dc_id = $1) AS virtual_machines
+      `,
+      [dcId]
+    );
+    const deleted = await pool.query('DELETE FROM data_centers WHERE id = $1 RETURNING id', [dcId]);
+    if (!deleted.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'data center not found' });
+      return true;
+    }
+    sendJson(res, 200, { id: dcId, deleted: true, cascade: summaryRes.rows[0] || {} });
     return true;
   }
 
@@ -3832,8 +4418,159 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/v1/panorama/lb-domains') {
-    const { rows } = await pool.query('SELECT payload FROM lb_domains ORDER BY payload->>\'domainName\'');
-    sendJson(res, 200, rows.map((row) => row.payload));
+    const { rows } = await pool.query('SELECT id, pool_id, payload FROM lb_domains ORDER BY payload->>\'domainName\'');
+    sendJson(res, 200, rows.map((row) => ({ ...row.payload, id: row.id, poolId: row.pool_id })));
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/panorama/lb-domains') {
+    const body = await readJsonBody(req);
+    const normalized = normalizeLbDomainInput(body);
+    const saved = await withTransaction(async (client) => {
+      const poolRes = await client.query('SELECT id FROM lb_service_pools WHERE id = $1', [normalized.pool.poolId]);
+      if (poolRes.rows.length) {
+        await client.query(
+          'UPDATE lb_service_pools SET payload = $2::jsonb, updated_at = now() WHERE id = $1',
+          [normalized.pool.poolId, JSON.stringify(normalized.pool)]
+        );
+      } else {
+        await client.query(
+          'INSERT INTO lb_service_pools (id, payload) VALUES ($1, $2::jsonb)',
+          [normalized.pool.poolId, JSON.stringify(normalized.pool)]
+        );
+      }
+      if (normalized.backends.length) {
+        await client.query('DELETE FROM lb_pool_members WHERE pool_id = $1', [normalized.pool.poolId]);
+        for (let i = 0; i < normalized.backends.length; i += 1) {
+          await client.query(
+            'INSERT INTO lb_pool_members (id, pool_id, payload) VALUES ($1, $2, $3::jsonb)',
+            [`${normalized.pool.poolId}-member-${i + 1}`, normalized.pool.poolId, JSON.stringify(normalized.backends[i])]
+          );
+        }
+      }
+      try {
+        await client.query(
+          'INSERT INTO lb_domains (id, pool_id, payload) VALUES ($1, $2, $3::jsonb)',
+          [normalized.id, normalized.pool.poolId, JSON.stringify(normalized.payload)]
+        );
+      } catch (error) {
+        if (String(error.code) === '23505') throw new HttpError(409, `lb domain '${normalized.id}' already exists`);
+        throw error;
+      }
+      const chainPayload = {
+        domain: normalized.payload.domainName,
+        vip: normalized.payload.vip,
+        lbDevice: normalized.payload.lbDevice,
+        pool: normalized.pool.poolName,
+        backends: normalized.backends,
+        ssl: { valid: true, expireDate: normalized.payload.sslCertExpire }
+      };
+      await client.query(
+        `
+        INSERT INTO traffic_chains (domain_name, payload, updated_at)
+        VALUES ($1, $2::jsonb, now())
+        ON CONFLICT (domain_name)
+        DO UPDATE SET payload = EXCLUDED.payload, updated_at = now()
+        `,
+        [normalized.payload.domainName, JSON.stringify(chainPayload)]
+      );
+      return { ...normalized.payload, id: normalized.id, poolId: normalized.pool.poolId };
+    });
+    sendJson(res, 201, saved);
+    return true;
+  }
+
+  const lbDomainItemMatch = url.pathname.match(/^\/api\/v1\/panorama\/lb-domains\/([^/]+)$/);
+  if (req.method === 'PUT' && lbDomainItemMatch) {
+    const domainId = decodeURIComponent(lbDomainItemMatch[1]);
+    const body = await readJsonBody(req);
+    const saved = await withTransaction(async (client) => {
+      const currentRes = await client.query('SELECT pool_id, payload FROM lb_domains WHERE id = $1', [domainId]);
+      if (!currentRes.rows.length) throw new HttpError(404, 'lb domain not found');
+      const current = currentRes.rows[0];
+      const currentPoolRes = await client.query('SELECT payload FROM lb_service_pools WHERE id = $1', [current.pool_id]);
+      const merged = {
+        ...current.payload,
+        poolId: current.pool_id,
+        poolName: currentPoolRes.rows[0]?.payload?.poolName || '',
+        ...body,
+        id: domainId
+      };
+      const normalized = normalizeLbDomainInput(merged, domainId);
+
+      const poolCheck = await client.query('SELECT id FROM lb_service_pools WHERE id = $1', [normalized.pool.poolId]);
+      if (poolCheck.rows.length) {
+        await client.query(
+          'UPDATE lb_service_pools SET payload = $2::jsonb, updated_at = now() WHERE id = $1',
+          [normalized.pool.poolId, JSON.stringify(normalized.pool)]
+        );
+      } else {
+        await client.query(
+          'INSERT INTO lb_service_pools (id, payload) VALUES ($1, $2::jsonb)',
+          [normalized.pool.poolId, JSON.stringify(normalized.pool)]
+        );
+      }
+      if (body?.backends && Array.isArray(body.backends)) {
+        await client.query('DELETE FROM lb_pool_members WHERE pool_id = $1', [normalized.pool.poolId]);
+        for (let i = 0; i < normalized.backends.length; i += 1) {
+          await client.query(
+            'INSERT INTO lb_pool_members (id, pool_id, payload) VALUES ($1, $2, $3::jsonb)',
+            [`${normalized.pool.poolId}-member-${i + 1}`, normalized.pool.poolId, JSON.stringify(normalized.backends[i])]
+          );
+        }
+      }
+      await client.query(
+        'UPDATE lb_domains SET pool_id = $2, payload = $3::jsonb, updated_at = now() WHERE id = $1',
+        [domainId, normalized.pool.poolId, JSON.stringify(normalized.payload)]
+      );
+      if (normalized.pool.poolId !== current.pool_id) {
+        const refRes = await client.query('SELECT COUNT(*)::int AS n FROM lb_domains WHERE pool_id = $1', [current.pool_id]);
+        if ((refRes.rows[0]?.n || 0) === 0) {
+          await client.query('DELETE FROM lb_service_pools WHERE id = $1', [current.pool_id]);
+        }
+      }
+
+      const backendsRes = await client.query('SELECT payload FROM lb_pool_members WHERE pool_id = $1 ORDER BY id', [normalized.pool.poolId]);
+      const chainPayload = {
+        domain: normalized.payload.domainName,
+        vip: normalized.payload.vip,
+        lbDevice: normalized.payload.lbDevice,
+        pool: normalized.pool.poolName,
+        backends: backendsRes.rows.map((r) => r.payload),
+        ssl: { valid: true, expireDate: normalized.payload.sslCertExpire }
+      };
+      await client.query(
+        `
+        INSERT INTO traffic_chains (domain_name, payload, updated_at)
+        VALUES ($1, $2::jsonb, now())
+        ON CONFLICT (domain_name)
+        DO UPDATE SET payload = EXCLUDED.payload, updated_at = now()
+        `,
+        [normalized.payload.domainName, JSON.stringify(chainPayload)]
+      );
+      return { ...normalized.payload, id: domainId, poolId: normalized.pool.poolId };
+    });
+    sendJson(res, 200, saved);
+    return true;
+  }
+
+  if (req.method === 'DELETE' && lbDomainItemMatch) {
+    const domainId = decodeURIComponent(lbDomainItemMatch[1]);
+    const result = await withTransaction(async (client) => {
+      const currentRes = await client.query('SELECT pool_id, payload FROM lb_domains WHERE id = $1', [domainId]);
+      if (!currentRes.rows.length) throw new HttpError(404, 'lb domain not found');
+      const current = currentRes.rows[0];
+      await client.query('DELETE FROM lb_domains WHERE id = $1', [domainId]);
+      await client.query('DELETE FROM traffic_chains WHERE domain_name = $1', [current.payload?.domainName || '']);
+      const refRes = await client.query('SELECT COUNT(*)::int AS n FROM lb_domains WHERE pool_id = $1', [current.pool_id]);
+      let poolDeleted = false;
+      if ((refRes.rows[0]?.n || 0) === 0) {
+        const delPool = await client.query('DELETE FROM lb_service_pools WHERE id = $1 RETURNING id', [current.pool_id]);
+        poolDeleted = delPool.rows.length > 0;
+      }
+      return { poolId: current.pool_id, domainName: current.payload?.domainName || '', poolDeleted };
+    });
+    sendJson(res, 200, { id: domainId, deleted: true, cleanup: result });
     return true;
   }
 
@@ -3846,8 +4583,53 @@ async function handleApi(req, res, url) {
       sql += ` WHERE app_id = $${params.length}`;
     }
     sql += ' ORDER BY id';
-    const { rows } = await pool.query(sql, params);
-    sendJson(res, 200, rows.map((row) => row.payload));
+    const { rows } = await pool.query(sql.replace('SELECT payload FROM otel_services', 'SELECT id, app_id, payload FROM otel_services'), params);
+    sendJson(res, 200, rows.map((row) => ({ ...row.payload, id: row.id, appId: row.app_id })));
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/panorama/otel-services') {
+    const body = await readJsonBody(req);
+    const svc = normalizeOtelServiceInput(body);
+    const appCheck = await pool.query('SELECT id FROM applications WHERE id = $1', [svc.appId]);
+    if (!appCheck.rows.length) throw new HttpError(404, `application '${svc.appId}' not found`);
+    try {
+      await pool.query('INSERT INTO otel_services (id, app_id, payload) VALUES ($1, $2, $3::jsonb)', [svc.id, svc.appId, JSON.stringify(svc.payload)]);
+    } catch (error) {
+      if (String(error.code) === '23505') throw new HttpError(409, `otel service '${svc.id}' already exists`);
+      throw error;
+    }
+    sendJson(res, 201, { ...svc.payload, id: svc.id, appId: svc.appId });
+    return true;
+  }
+
+  const otelServiceItemMatch = url.pathname.match(/^\/api\/v1\/panorama\/otel-services\/([^/]+)$/);
+  if (req.method === 'PUT' && otelServiceItemMatch) {
+    const serviceId = decodeURIComponent(otelServiceItemMatch[1]);
+    const body = await readJsonBody(req);
+    const current = await pool.query('SELECT app_id, payload FROM otel_services WHERE id = $1', [serviceId]);
+    if (!current.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'otel service not found' });
+      return true;
+    }
+    const merged = { ...current.rows[0].payload, ...body, id: serviceId, appId: body?.appId || current.rows[0].app_id };
+    const next = normalizeOtelServiceInput(merged, serviceId);
+    const appCheck = await pool.query('SELECT id FROM applications WHERE id = $1', [next.appId]);
+    if (!appCheck.rows.length) throw new HttpError(404, `application '${next.appId}' not found`);
+    await pool.query('UPDATE otel_services SET app_id = $2, payload = $3::jsonb, updated_at = now() WHERE id = $1', [serviceId, next.appId, JSON.stringify(next.payload)]);
+    sendJson(res, 200, { ...next.payload, id: serviceId, appId: next.appId });
+    return true;
+  }
+
+  if (req.method === 'DELETE' && otelServiceItemMatch) {
+    const serviceId = decodeURIComponent(otelServiceItemMatch[1]);
+    const summaryRes = await pool.query('SELECT COUNT(*)::int AS instances FROM otel_instances WHERE service_id = $1', [serviceId]);
+    const deleted = await pool.query('DELETE FROM otel_services WHERE id = $1 RETURNING id', [serviceId]);
+    if (!deleted.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'otel service not found' });
+      return true;
+    }
+    sendJson(res, 200, { id: serviceId, deleted: true, cascade: summaryRes.rows[0] || {} });
     return true;
   }
 
