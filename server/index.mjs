@@ -1214,6 +1214,35 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+let shuttingDown = false;
+function setupSignalHandlers() {
+  const shutdown = (signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[shutdown] received ${signal}, closing server...`);
+
+    const forceExitTimer = setTimeout(() => {
+      console.warn('[shutdown] force exit after timeout');
+      process.exit(0);
+    }, 10000);
+    forceExitTimer.unref();
+
+    server.close(async () => {
+      try {
+        await pool.end();
+        console.log('[shutdown] complete');
+        process.exit(0);
+      } catch (error) {
+        console.error('[shutdown] error while closing resources', error);
+        process.exit(1);
+      }
+    });
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+}
+
 async function start() {
   const hasPgParts = !!(process.env.PGHOST && process.env.PGUSER && process.env.PGDATABASE);
   if (IS_RENDER && !DATABASE_URL && !hasPgParts) {
@@ -1252,3 +1281,5 @@ start().catch((error) => {
   console.error('[startup-error]', error);
   process.exit(1);
 });
+
+setupSignalHandlers();
