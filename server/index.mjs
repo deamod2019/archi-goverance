@@ -27,7 +27,7 @@ const pool = new Pool(
 
 const STARTUP_DB_RETRIES = Number.parseInt(process.env.STARTUP_DB_RETRIES || '30', 10);
 const STARTUP_DB_RETRY_MS = Number.parseInt(process.env.STARTUP_DB_RETRY_MS || '2000', 10);
-const API_VERSION = process.env.API_VERSION || '1.3.0';
+const API_VERSION = process.env.API_VERSION || '1.4.0';
 const APP_REVISION =
   process.env.RENDER_GIT_COMMIT ||
   process.env.RENDER_GIT_BRANCH_COMMIT ||
@@ -36,6 +36,54 @@ const APP_REVISION =
   'dev';
 
 const REQUIRED_SECTIONS = ['MOCK', 'PERSONS', 'TEAMS', 'ARCH_STANDARDS', 'RULE_STD_MAP'];
+const TARGET_ENTITY_TOTAL = 43;
+const COVERAGE_TABLES = [
+  'domains',
+  'capabilities',
+  'processes',
+  'systems',
+  'subsystems',
+  'applications',
+  'dependency_nodes',
+  'dependencies',
+  'data_objects',
+  'subject_areas',
+  'logical_entities',
+  'tech_standards',
+  'tech_components',
+  'app_tech_rel',
+  'compliance_rules',
+  'reviews',
+  'review_checks',
+  'artifacts',
+  'otel_services',
+  'otel_instances',
+  'data_centers',
+  'machine_rooms',
+  'racks',
+  'physical_servers',
+  'virtual_machines',
+  'k8s_clusters',
+  'k8s_namespaces',
+  'containers',
+  'network_zones',
+  'network_devices',
+  'physical_networks',
+  'vips',
+  'firewall_rules',
+  'database_clusters',
+  'database_instances',
+  'database_dr',
+  'database_cluster_apps',
+  'middleware_clusters',
+  'middleware_instances',
+  'middleware_cluster_apps',
+  'lb_clusters',
+  'lb_devices',
+  'lb_service_pools',
+  'lb_pool_members',
+  'lb_domains'
+];
 
 const BOOTSTRAP_PROJECTIONS = {
   full: REQUIRED_SECTIONS,
@@ -376,6 +424,101 @@ async function initSchema() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    CREATE TABLE IF NOT EXISTS machine_rooms (
+      id TEXT PRIMARY KEY,
+      dc_id TEXT NOT NULL REFERENCES data_centers(id) ON DELETE CASCADE,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS racks (
+      id TEXT PRIMARY KEY,
+      room_id TEXT NOT NULL REFERENCES machine_rooms(id) ON DELETE CASCADE,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS physical_servers (
+      id TEXT PRIMARY KEY,
+      rack_id TEXT NOT NULL REFERENCES racks(id) ON DELETE CASCADE,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS virtual_machines (
+      id TEXT PRIMARY KEY,
+      server_id TEXT NOT NULL REFERENCES physical_servers(id) ON DELETE CASCADE,
+      dc_id TEXT NOT NULL REFERENCES data_centers(id) ON DELETE CASCADE,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS k8s_clusters (
+      id TEXT PRIMARY KEY,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS k8s_namespaces (
+      id TEXT PRIMARY KEY,
+      cluster_id TEXT NOT NULL REFERENCES k8s_clusters(id) ON DELETE CASCADE,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS containers (
+      id TEXT PRIMARY KEY,
+      namespace_id TEXT NOT NULL REFERENCES k8s_namespaces(id) ON DELETE CASCADE,
+      vm_id TEXT REFERENCES virtual_machines(id) ON DELETE SET NULL,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS network_zones (
+      id TEXT PRIMARY KEY,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS network_devices (
+      id TEXT PRIMARY KEY,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS physical_networks (
+      id TEXT PRIMARY KEY,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS vips (
+      id TEXT PRIMARY KEY,
+      app_id TEXT REFERENCES applications(id) ON DELETE SET NULL,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS firewall_rules (
+      id TEXT PRIMARY KEY,
+      source_zone_id TEXT NOT NULL REFERENCES network_zones(id) ON DELETE CASCADE,
+      target_zone_id TEXT NOT NULL REFERENCES network_zones(id) ON DELETE CASCADE,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     CREATE INDEX IF NOT EXISTS idx_systems_domain_id ON systems(domain_id);
     CREATE INDEX IF NOT EXISTS idx_subsystems_system_id ON subsystems(system_id);
     CREATE INDEX IF NOT EXISTS idx_applications_subsystem_id ON applications(subsystem_id);
@@ -403,6 +546,17 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_lb_devices_cluster_id ON lb_devices(cluster_id);
     CREATE INDEX IF NOT EXISTS idx_lb_domains_pool_id ON lb_domains(pool_id);
     CREATE INDEX IF NOT EXISTS idx_lb_pool_members_pool_id ON lb_pool_members(pool_id);
+    CREATE INDEX IF NOT EXISTS idx_machine_rooms_dc_id ON machine_rooms(dc_id);
+    CREATE INDEX IF NOT EXISTS idx_racks_room_id ON racks(room_id);
+    CREATE INDEX IF NOT EXISTS idx_physical_servers_rack_id ON physical_servers(rack_id);
+    CREATE INDEX IF NOT EXISTS idx_virtual_machines_server_id ON virtual_machines(server_id);
+    CREATE INDEX IF NOT EXISTS idx_virtual_machines_dc_id ON virtual_machines(dc_id);
+    CREATE INDEX IF NOT EXISTS idx_k8s_namespaces_cluster_id ON k8s_namespaces(cluster_id);
+    CREATE INDEX IF NOT EXISTS idx_containers_namespace_id ON containers(namespace_id);
+    CREATE INDEX IF NOT EXISTS idx_containers_vm_id ON containers(vm_id);
+    CREATE INDEX IF NOT EXISTS idx_vips_app_id ON vips(app_id);
+    CREATE INDEX IF NOT EXISTS idx_firewall_rules_source_zone_id ON firewall_rules(source_zone_id);
+    CREATE INDEX IF NOT EXISTS idx_firewall_rules_target_zone_id ON firewall_rules(target_zone_id);
   `);
 }
 
@@ -424,7 +578,7 @@ async function upsertMockSections(client, seedData) {
 }
 
 async function reseedStructuredData(client, seedData) {
-  await client.query('TRUNCATE TABLE review_checks, reviews, dependencies, dependency_nodes, data_objects, app_tech_rel, artifacts, otel_instances, otel_services, lb_domains, lb_pool_members, lb_service_pools, lb_devices, lb_clusters, applications, subsystems, processes, capabilities, logical_entities, subject_areas, systems, domains, compliance_rules, data_centers, database_instances, database_cluster_apps, database_dr, database_clusters, middleware_instances, middleware_cluster_apps, middleware_clusters, tech_components, tech_standards, drift_events, traffic_chains RESTART IDENTITY CASCADE');
+  await client.query('TRUNCATE TABLE review_checks, reviews, dependencies, dependency_nodes, data_objects, app_tech_rel, artifacts, otel_instances, otel_services, containers, k8s_namespaces, k8s_clusters, virtual_machines, physical_servers, racks, machine_rooms, lb_domains, lb_pool_members, lb_service_pools, lb_devices, lb_clusters, firewall_rules, vips, network_devices, physical_networks, network_zones, applications, subsystems, processes, capabilities, logical_entities, subject_areas, systems, domains, compliance_rules, data_centers, database_instances, database_cluster_apps, database_dr, database_clusters, middleware_instances, middleware_cluster_apps, middleware_clusters, tech_components, tech_standards, drift_events, traffic_chains RESTART IDENTITY CASCADE');
 
   for (const domain of seedData.MOCK.domains || []) {
     await client.query('INSERT INTO domains (id, payload) VALUES ($1, $2::jsonb)', [domain.id, JSON.stringify(domain)]);
@@ -832,6 +986,155 @@ async function reseedStructuredData(client, seedData) {
       [domainName, JSON.stringify(buildTrafficChain(domainName))]
     );
   }
+
+  const zoneDefs = [
+    { id: 'zone-dmz', zoneName: 'DMZ区', zoneLevel: 'DMZ' },
+    { id: 'zone-intra', zoneName: '内网业务区', zoneLevel: 'INTRANET' },
+    { id: 'zone-core', zoneName: '核心数据区', zoneLevel: 'CORE' },
+    { id: 'zone-mgt', zoneName: '管理区', zoneLevel: 'MGT' }
+  ];
+  for (const zone of zoneDefs) {
+    await client.query('INSERT INTO network_zones (id, payload) VALUES ($1, $2::jsonb)', [zone.id, JSON.stringify(zone)]);
+  }
+
+  const networkDefs = [
+    { id: 'pnet-core', networkName: '核心业务VLAN', networkType: 'VLAN', cidr: '10.2.0.0/16' },
+    { id: 'pnet-platform', networkName: '平台服务VLAN', networkType: 'VLAN', cidr: '10.8.0.0/16' },
+    { id: 'pnet-mgt', networkName: '管理网络', networkType: 'VPC', cidr: '10.10.0.0/16' }
+  ];
+  for (const pnet of networkDefs) {
+    await client.query('INSERT INTO physical_networks (id, payload) VALUES ($1, $2::jsonb)', [pnet.id, JSON.stringify(pnet)]);
+  }
+
+  const networkDevices = [
+    { id: 'nd-fw-01', deviceType: 'FW', deviceName: 'FW-PROD-01' },
+    { id: 'nd-sw-01', deviceType: 'SWITCH', deviceName: 'SW-CORE-01' },
+    { id: 'nd-lb-01', deviceType: 'LB', deviceName: 'F5-PROD-01' }
+  ];
+  for (const nd of networkDevices) {
+    await client.query('INSERT INTO network_devices (id, payload) VALUES ($1, $2::jsonb)', [nd.id, JSON.stringify(nd)]);
+  }
+
+  await client.query(
+    'INSERT INTO firewall_rules (id, source_zone_id, target_zone_id, payload) VALUES ($1, $2, $3, $4::jsonb)',
+    ['fw-rule-001', 'zone-dmz', 'zone-intra', JSON.stringify({
+      ruleId: 'fw-rule-001',
+      sourceZoneId: 'zone-dmz',
+      targetZoneId: 'zone-intra',
+      protocol: 'HTTPS',
+      port: 443,
+      action: 'ALLOW'
+    })]
+  );
+  await client.query(
+    'INSERT INTO firewall_rules (id, source_zone_id, target_zone_id, payload) VALUES ($1, $2, $3, $4::jsonb)',
+    ['fw-rule-002', 'zone-intra', 'zone-core', JSON.stringify({
+      ruleId: 'fw-rule-002',
+      sourceZoneId: 'zone-intra',
+      targetZoneId: 'zone-core',
+      protocol: 'TCP',
+      port: 3306,
+      action: 'ALLOW'
+    })]
+  );
+
+  const dcRows = seedData.MOCK.dataCenters || [];
+  const vmIds = [];
+  for (let i = 0; i < dcRows.length; i += 1) {
+    const dc = dcRows[i];
+    const roomId = `room-${dc.id}`;
+    await client.query(
+      'INSERT INTO machine_rooms (id, dc_id, payload) VALUES ($1, $2, $3::jsonb)',
+      [roomId, dc.id, JSON.stringify({ roomId, dcId: dc.id, roomName: `${dc.name}-机房A` })]
+    );
+
+    for (let r = 0; r < 2; r += 1) {
+      const rackId = `rack-${dc.id}-${r + 1}`;
+      await client.query(
+        'INSERT INTO racks (id, room_id, payload) VALUES ($1, $2, $3::jsonb)',
+        [rackId, roomId, JSON.stringify({ rackId, roomId, rackName: `${dc.name}-R${r + 1}` })]
+      );
+
+      for (let s = 0; s < 2; s += 1) {
+        const serverId = `srv-${dc.id}-${r + 1}-${s + 1}`;
+        await client.query(
+          'INSERT INTO physical_servers (id, rack_id, payload) VALUES ($1, $2, $3::jsonb)',
+          [serverId, rackId, JSON.stringify({
+            serverId,
+            rackId,
+            serialNumber: `SN-${dc.id}-${r + 1}${s + 1}`,
+            osType: 'LINUX'
+          })]
+        );
+
+        for (let v = 0; v < 2; v += 1) {
+          const vmId = `vm-${dc.id}-${r + 1}-${s + 1}-${v + 1}`;
+          vmIds.push(vmId);
+          await client.query(
+            'INSERT INTO virtual_machines (id, server_id, dc_id, payload) VALUES ($1, $2, $3, $4::jsonb)',
+            [vmId, serverId, dc.id, JSON.stringify({
+              vmId,
+              serverId,
+              dcId: dc.id,
+              ipAddress: `10.${i + 2}.${r + 1}.${(s * 10) + v + 11}`,
+              osType: 'LINUX',
+              osDistribution: 'RHEL 8.6'
+            })]
+          );
+        }
+      }
+    }
+  }
+
+  const k8sClusterDefs = [
+    { id: 'k8s-prod-core', clusterName: '生产核心K8S集群' },
+    { id: 'k8s-prod-platform', clusterName: '生产平台K8S集群' }
+  ];
+  for (const kc of k8sClusterDefs) {
+    await client.query('INSERT INTO k8s_clusters (id, payload) VALUES ($1, $2::jsonb)', [kc.id, JSON.stringify(kc)]);
+  }
+
+  const namespaces = [
+    { id: 'ns-retail', clusterId: 'k8s-prod-core', namespaceName: 'retail-prod' },
+    { id: 'ns-corp', clusterId: 'k8s-prod-core', namespaceName: 'corp-prod' },
+    { id: 'ns-platform', clusterId: 'k8s-prod-platform', namespaceName: 'platform-prod' }
+  ];
+  for (const ns of namespaces) {
+    await client.query(
+      'INSERT INTO k8s_namespaces (id, cluster_id, payload) VALUES ($1, $2, $3::jsonb)',
+      [ns.id, ns.clusterId, JSON.stringify(ns)]
+    );
+  }
+
+  let containerSeq = 1;
+  for (const app of allApps.slice(0, 18)) {
+    const ns = app.systemId === 'gateway-sys' || app.systemId === 'devops' || app.systemId === 'monitor' ? 'ns-platform' : (app.systemId === 'core-bank' ? 'ns-corp' : 'ns-retail');
+    const vmId = vmIds[containerSeq % vmIds.length] || null;
+    const containerId = `ctr-${app.id}-${String(containerSeq).padStart(3, '0')}`;
+    containerSeq += 1;
+    await client.query(
+      'INSERT INTO containers (id, namespace_id, vm_id, payload) VALUES ($1, $2, $3, $4::jsonb)',
+      [containerId, ns, vmId, JSON.stringify({
+        containerId,
+        namespaceId: ns,
+        vmId,
+        podName: `${app.id}-pod-01`,
+        status: app.status || 'RUNNING'
+      })]
+    );
+  }
+
+  for (let i = 0; i < allApps.slice(0, 8).length; i += 1) {
+    const app = allApps[i];
+    await client.query(
+      'INSERT INTO vips (id, app_id, payload) VALUES ($1, $2, $3::jsonb)',
+      [`vip-${app.id}`, app.id, JSON.stringify({
+        vipId: `vip-${app.id}`,
+        appId: app.id,
+        vipAddress: `10.1.${Math.floor(i / 250) + 1}.${100 + i}`
+      })]
+    );
+  }
 }
 
 async function ensureSeedData() {
@@ -1079,6 +1382,25 @@ async function nextReviewId() {
   return `REV-${year}-${seq}`;
 }
 
+async function getEntityCoverage() {
+  const details = [];
+  for (const tableName of COVERAGE_TABLES) {
+    const { rows } = await pool.query(`SELECT COUNT(*)::int AS n FROM ${tableName}`);
+    details.push({ table: tableName, rows: rows[0].n });
+  }
+  const nonEmptyCount = details.filter((d) => d.rows > 0).length;
+  const mappedEntityCount = Math.min(nonEmptyCount, TARGET_ENTITY_TOTAL);
+  const coverage = Number(((mappedEntityCount / TARGET_ENTITY_TOTAL) * 100).toFixed(1));
+  return {
+    targetEntities: TARGET_ENTITY_TOTAL,
+    mappedEntities: mappedEntityCount,
+    coveragePct: coverage,
+    nonEmptyTables: nonEmptyCount,
+    tableCount: COVERAGE_TABLES.length,
+    details
+  };
+}
+
 async function evaluateCompliance(reviewRow) {
   const payload = reviewRow.payload || {};
   const deploy = String(payload.dc || payload.deploy || '').toLowerCase();
@@ -1231,6 +1553,12 @@ async function handleApi(req, res, url) {
       env: process.env.NODE_ENV || 'development',
       timestamp: new Date().toISOString()
     });
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/meta/entity-coverage') {
+    const coverage = await getEntityCoverage();
+    sendJson(res, 200, coverage);
     return true;
   }
 
@@ -1688,6 +2016,155 @@ async function handleApi(req, res, url) {
     if (logicalEntityId) {
       params.push(logicalEntityId);
       conditions.push(`logical_entity_id = $${params.length}`);
+    }
+    if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
+    sql += ' ORDER BY id';
+    const { rows } = await pool.query(sql, params);
+    sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/infra/data-centers') {
+    const { rows } = await pool.query('SELECT payload FROM data_centers ORDER BY id');
+    sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/infra/machine-rooms') {
+    const dcId = url.searchParams.get('dc_id');
+    const params = [];
+    let sql = 'SELECT payload FROM machine_rooms';
+    if (dcId) {
+      params.push(dcId);
+      sql += ` WHERE dc_id = $${params.length}`;
+    }
+    sql += ' ORDER BY id';
+    const { rows } = await pool.query(sql, params);
+    sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/infra/racks') {
+    const roomId = url.searchParams.get('room_id');
+    const params = [];
+    let sql = 'SELECT payload FROM racks';
+    if (roomId) {
+      params.push(roomId);
+      sql += ` WHERE room_id = $${params.length}`;
+    }
+    sql += ' ORDER BY id';
+    const { rows } = await pool.query(sql, params);
+    sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/infra/physical-servers') {
+    const rackId = url.searchParams.get('rack_id');
+    const params = [];
+    let sql = 'SELECT payload FROM physical_servers';
+    if (rackId) {
+      params.push(rackId);
+      sql += ` WHERE rack_id = $${params.length}`;
+    }
+    sql += ' ORDER BY id';
+    const { rows } = await pool.query(sql, params);
+    sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/infra/virtual-machines') {
+    const dcId = url.searchParams.get('dc_id');
+    const params = [];
+    let sql = 'SELECT payload FROM virtual_machines';
+    if (dcId) {
+      params.push(dcId);
+      sql += ` WHERE dc_id = $${params.length}`;
+    }
+    sql += ' ORDER BY id';
+    const { rows } = await pool.query(sql, params);
+    sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/infra/k8s-clusters') {
+    const { rows } = await pool.query('SELECT payload FROM k8s_clusters ORDER BY id');
+    sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/infra/k8s-namespaces') {
+    const clusterId = url.searchParams.get('cluster_id');
+    const params = [];
+    let sql = 'SELECT payload FROM k8s_namespaces';
+    if (clusterId) {
+      params.push(clusterId);
+      sql += ` WHERE cluster_id = $${params.length}`;
+    }
+    sql += ' ORDER BY id';
+    const { rows } = await pool.query(sql, params);
+    sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/infra/containers') {
+    const namespaceId = url.searchParams.get('namespace_id');
+    const params = [];
+    let sql = 'SELECT payload FROM containers';
+    if (namespaceId) {
+      params.push(namespaceId);
+      sql += ` WHERE namespace_id = $${params.length}`;
+    }
+    sql += ' ORDER BY id';
+    const { rows } = await pool.query(sql, params);
+    sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/infra/network-zones') {
+    const { rows } = await pool.query('SELECT payload FROM network_zones ORDER BY id');
+    sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/infra/network-devices') {
+    const { rows } = await pool.query('SELECT payload FROM network_devices ORDER BY id');
+    sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/infra/physical-networks') {
+    const { rows } = await pool.query('SELECT payload FROM physical_networks ORDER BY id');
+    sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/infra/vips') {
+    const appId = url.searchParams.get('app_id');
+    const params = [];
+    let sql = 'SELECT payload FROM vips';
+    if (appId) {
+      params.push(appId);
+      sql += ` WHERE app_id = $${params.length}`;
+    }
+    sql += ' ORDER BY id';
+    const { rows } = await pool.query(sql, params);
+    sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/infra/firewall-rules') {
+    const sourceZoneId = url.searchParams.get('source_zone_id');
+    const targetZoneId = url.searchParams.get('target_zone_id');
+    const params = [];
+    let sql = 'SELECT payload FROM firewall_rules';
+    const conditions = [];
+    if (sourceZoneId) {
+      params.push(sourceZoneId);
+      conditions.push(`source_zone_id = $${params.length}`);
+    }
+    if (targetZoneId) {
+      params.push(targetZoneId);
+      conditions.push(`target_zone_id = $${params.length}`);
     }
     if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
     sql += ' ORDER BY id';

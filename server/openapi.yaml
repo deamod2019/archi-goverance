@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Aichi Governance API
-  version: 1.3.0
+  version: 1.4.0
 servers:
   - url: /
 paths:
@@ -16,6 +16,12 @@ paths:
       summary: Get service version and revision info
       responses:
         '200': { description: Version payload }
+
+  /api/v1/meta/entity-coverage:
+    get:
+      summary: Get current entity implementation coverage
+      responses:
+        '200': { description: Coverage payload }
 
   /api/v1/bootstrap:
     get:
@@ -368,6 +374,119 @@ paths:
           schema: { type: string }
       responses:
         '200': { description: Data object list }
+
+  /api/v1/infra/data-centers:
+    get:
+      summary: List infrastructure data centers
+      responses:
+        '200': { description: Data center list }
+
+  /api/v1/infra/machine-rooms:
+    get:
+      summary: List machine rooms
+      parameters:
+        - in: query
+          name: dc_id
+          schema: { type: string }
+      responses:
+        '200': { description: Machine room list }
+
+  /api/v1/infra/racks:
+    get:
+      summary: List racks
+      parameters:
+        - in: query
+          name: room_id
+          schema: { type: string }
+      responses:
+        '200': { description: Rack list }
+
+  /api/v1/infra/physical-servers:
+    get:
+      summary: List physical servers
+      parameters:
+        - in: query
+          name: rack_id
+          schema: { type: string }
+      responses:
+        '200': { description: Physical server list }
+
+  /api/v1/infra/virtual-machines:
+    get:
+      summary: List virtual machines
+      parameters:
+        - in: query
+          name: dc_id
+          schema: { type: string }
+      responses:
+        '200': { description: VM list }
+
+  /api/v1/infra/k8s-clusters:
+    get:
+      summary: List k8s clusters
+      responses:
+        '200': { description: K8s cluster list }
+
+  /api/v1/infra/k8s-namespaces:
+    get:
+      summary: List k8s namespaces
+      parameters:
+        - in: query
+          name: cluster_id
+          schema: { type: string }
+      responses:
+        '200': { description: Namespace list }
+
+  /api/v1/infra/containers:
+    get:
+      summary: List containers
+      parameters:
+        - in: query
+          name: namespace_id
+          schema: { type: string }
+      responses:
+        '200': { description: Container list }
+
+  /api/v1/infra/network-zones:
+    get:
+      summary: List network zones
+      responses:
+        '200': { description: Network zone list }
+
+  /api/v1/infra/network-devices:
+    get:
+      summary: List network devices
+      responses:
+        '200': { description: Network device list }
+
+  /api/v1/infra/physical-networks:
+    get:
+      summary: List physical networks
+      responses:
+        '200': { description: Physical network list }
+
+  /api/v1/infra/vips:
+    get:
+      summary: List VIPs
+      parameters:
+        - in: query
+          name: app_id
+          schema: { type: string }
+      responses:
+        '200': { description: VIP list }
+
+  /api/v1/infra/firewall-rules:
+    get:
+      summary: List firewall rules
+      parameters:
+        - in: query
+          name: source_zone_id
+          schema: { type: string }
+        - in: query
+          name: target_zone_id
+          schema: { type: string }
+      responses:
+        '200': { description: Firewall rule list }
 
   /api/v1/reviews:
     get:
