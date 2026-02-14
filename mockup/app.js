@@ -72,87 +72,139 @@ function normalizeTreemapWeight(value) {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-function treemapWorstAspect(row, shortSide) {
-  if (!row.length || shortSide <= 0) return Number.POSITIVE_INFINITY;
-  let sum = 0;
-  let min = Number.POSITIVE_INFINITY;
-  let max = 0;
-  row.forEach((entry) => {
-    const area = Math.max(entry.area, 1e-6);
-    sum += area;
-    min = Math.min(min, area);
-    max = Math.max(max, area);
-  });
-  const side2 = shortSide * shortSide;
-  const sum2 = sum * sum;
-  return Math.max((side2 * max) / sum2, sum2 / (side2 * min));
+function pickLightestBandIndex(bands, maxPerBand) {
+  let picked = -1;
+  let minTotal = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < bands.length; i += 1) {
+    if (bands[i].items.length >= maxPerBand) continue;
+    if (bands[i].total < minTotal) {
+      minTotal = bands[i].total;
+      picked = i;
+    }
+  }
+  if (picked >= 0) return picked;
+  return bands.reduce((best, band, idx) => (band.total < bands[best].total ? idx : best), 0);
 }
 
-function layoutTreemapRow(row, box, output) {
-  if (!row.length || box.w <= 0 || box.h <= 0) return;
-  const sumArea = row.reduce((acc, entry) => acc + entry.area, 0);
-  if (box.w >= box.h) {
-    const rowH = sumArea / box.w;
-    let cursorX = box.x;
-    row.forEach((entry, idx) => {
-      const width = idx === row.length - 1 ? Math.max(0, box.x + box.w - cursorX) : Math.max(0, entry.area / rowH);
-      output.push({ item: entry.item, x: cursorX, y: box.y, w: width, h: rowH });
-      cursorX += width;
+function layoutLinearByWeight(entries, box, output, options = {}) {
+  if (!entries.length || box.w <= 0 || box.h <= 0) return;
+  const horizontal = options.horizontal !== false;
+  const reverse = !!options.reverse;
+  const total = entries.reduce((sum, entry) => sum + entry.weight, 0) || entries.length;
+
+  if (horizontal) {
+    let cursor = reverse ? box.x + box.w : box.x;
+    entries.forEach((entry, idx) => {
+      const width = idx === entries.length - 1
+        ? Math.max(0, reverse ? cursor - box.x : box.x + box.w - cursor)
+        : Math.max(0, (box.w * entry.weight) / total);
+      const xPos = reverse ? cursor - width : cursor;
+      output.push({ item: entry, x: xPos, y: box.y, w: width, h: box.h });
+      cursor = reverse ? cursor - width : cursor + width;
     });
-    box.y += rowH;
-    box.h = Math.max(0, box.h - rowH);
-  } else {
-    const colW = sumArea / box.h;
-    let cursorY = box.y;
-    row.forEach((entry, idx) => {
-      const height = idx === row.length - 1 ? Math.max(0, box.y + box.h - cursorY) : Math.max(0, entry.area / colW);
-      output.push({ item: entry.item, x: box.x, y: cursorY, w: colW, h: height });
-      cursorY += height;
-    });
-    box.x += colW;
-    box.w = Math.max(0, box.w - colW);
+    return;
   }
+
+  let cursor = reverse ? box.y + box.h : box.y;
+  entries.forEach((entry, idx) => {
+    const height = idx === entries.length - 1
+      ? Math.max(0, reverse ? cursor - box.y : box.y + box.h - cursor)
+      : Math.max(0, (box.h * entry.weight) / total);
+    const yPos = reverse ? cursor - height : cursor;
+    output.push({ item: entry, x: box.x, y: yPos, w: box.w, h: height });
+    cursor = reverse ? cursor - height : cursor + height;
+  });
+}
+
+function splitEntriesIntoTwoGroups(entries) {
+  const sorted = [...entries].sort((a, b) => b.weight - a.weight);
+  const top = [];
+  const bottom = [];
+  let topTotal = 0;
+  let bottomTotal = 0;
+  sorted.forEach((entry) => {
+    if (topTotal <= bottomTotal) {
+      top.push(entry);
+      topTotal += entry.weight;
+    } else {
+      bottom.push(entry);
+      bottomTotal += entry.weight;
+    }
+  });
+  return { top, bottom, topTotal, bottomTotal };
+}
+
+function layoutBandEntries(entries, box, output, bandIndex) {
+  if (!entries.length || box.w <= 0 || box.h <= 0) return;
+  if (entries.length <= 2) {
+    layoutLinearByWeight(entries, box, output, { horizontal: true, reverse: bandIndex % 2 === 1 });
+    return;
+  }
+  if (entries.length === 3) {
+    if (bandIndex % 2 === 0) {
+      layoutLinearByWeight(entries, box, output, { horizontal: true, reverse: false });
+    } else {
+      layoutLinearByWeight(entries, box, output, { horizontal: false, reverse: false });
+    }
+    return;
+  }
+
+  const { top, bottom, topTotal, bottomTotal } = splitEntriesIntoTwoGroups(entries);
+  const total = topTotal + bottomTotal;
+  if (!total || !top.length || !bottom.length) {
+    layoutLinearByWeight(entries, box, output, { horizontal: true, reverse: bandIndex % 2 === 1 });
+    return;
+  }
+
+  const ratio = Math.max(0.38, Math.min(0.62, topTotal / total));
+  const topH = box.h * ratio;
+  layoutLinearByWeight(top, { x: box.x, y: box.y, w: box.w, h: topH }, output, { horizontal: true, reverse: bandIndex % 2 === 1 });
+  layoutLinearByWeight(bottom, { x: box.x, y: box.y + topH, w: box.w, h: box.h - topH }, output, { horizontal: true, reverse: bandIndex % 2 !== 1 });
 }
 
 function buildTreemapLayout(items, x, y, w, h) {
   if (!Array.isArray(items) || !items.length || w <= 0 || h <= 0) return [];
 
-  const normalized = items.map((item) => ({ ...item, weight: normalizeTreemapWeight(item.weight) }));
+  const normalized = items
+    .map((item) => ({ ...item, weight: normalizeTreemapWeight(item.weight) }))
+    .sort((a, b) => b.weight - a.weight);
   let total = normalized.reduce((sum, item) => sum + item.weight, 0);
   if (total <= 0) {
     normalized.forEach((item) => { item.weight = 1; });
     total = normalized.length;
   }
 
-  const containerArea = w * h;
-  const queue = normalized
-    .map((entry) => ({ item: entry, area: (entry.weight / total) * containerArea }))
-    .sort((a, b) => b.area - a.area);
+  const n = normalized.length;
+  const estimatedBands = Math.round(Math.sqrt(n * (h / w))) + 1;
+  const bandCount = Math.max(2, Math.min(4, estimatedBands));
+  const maxPerBand = Math.ceil(n / bandCount) + 1;
+  const bands = Array.from({ length: Math.min(bandCount, n) }, () => ({ items: [], total: 0 }));
+  normalized.forEach((entry) => {
+    const idx = pickLightestBandIndex(bands, maxPerBand);
+    bands[idx].items.push(entry);
+    bands[idx].total += entry.weight;
+  });
+
+  const arranged = bands.filter((band) => band.items.length).sort((a, b) => b.total - a.total);
+  const arrangedTotal = arranged.reduce((sum, band) => sum + band.total, 0) || 1;
   const output = [];
-  const box = { x, y, w, h };
-  let row = [];
+  let cursorY = y;
 
-  while (queue.length) {
-    const candidate = queue[0];
-    if (!row.length) {
-      row.push(candidate);
-      queue.shift();
-      continue;
-    }
-    const shortSide = Math.min(box.w, box.h);
-    const currentWorst = treemapWorstAspect(row, shortSide);
-    const nextWorst = treemapWorstAspect([...row, candidate], shortSide);
-    if (nextWorst <= currentWorst) {
-      row.push(candidate);
-      queue.shift();
-      continue;
-    }
-    layoutTreemapRow(row, box, output);
-    row = [];
-  }
+  arranged.forEach((band, idx) => {
+    const bandH = idx === arranged.length - 1
+      ? Math.max(0, y + h - cursorY)
+      : Math.max(0, (h * band.total) / arrangedTotal);
+    layoutBandEntries(band.items, { x, y: cursorY, w, h: bandH }, output, idx);
+    cursorY += bandH;
+  });
 
-  if (row.length) layoutTreemapRow(row, box, output);
-  return output;
+  return output.map((rect) => ({
+    item: rect.item,
+    x: rect.x,
+    y: rect.y,
+    w: rect.w,
+    h: rect.h
+  }));
 }
 
 function setV1TreemapMetric(metric) {
