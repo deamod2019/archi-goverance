@@ -255,6 +255,10 @@ const PANORAMA_ENTITY_META = {
   k8sCluster: { label: 'K8S集群', path: '/api/v1/panorama/k8s-clusters' },
   k8sNamespace: { label: 'K8S命名空间', path: '/api/v1/panorama/k8s-namespaces' },
   k8sContainer: { label: 'K8S容器', path: '/api/v1/panorama/containers' },
+  machineRoom: { label: '机房', path: '/api/v1/panorama/machine-rooms' },
+  rack: { label: '机柜', path: '/api/v1/panorama/racks' },
+  physicalServer: { label: '物理机', path: '/api/v1/panorama/physical-servers' },
+  virtualMachine: { label: '虚拟机', path: '/api/v1/panorama/virtual-machines' },
   techComponent: { label: '技术组件', path: '/api/v1/tech-components' },
   appTechRelation: { label: '应用技术关系', path: '/api/v1/panorama/app-tech-relations' },
   artifact: { label: '制品', path: '/api/v1/panorama/artifacts' },
@@ -281,6 +285,10 @@ function getPanoramaAdminData() {
     k8sClusters: [],
     k8sNamespaces: [],
     k8sContainers: [],
+    machineRooms: [],
+    racks: [],
+    physicalServers: [],
+    virtualMachines: [],
     techComponents: [],
     appTechRelations: [],
     artifacts: [],
@@ -306,13 +314,17 @@ function fetchPanoramaAdminData() {
     apiRequest('/api/v1/panorama/k8s-clusters'),
     apiRequest('/api/v1/panorama/k8s-namespaces'),
     apiRequest('/api/v1/panorama/containers'),
+    apiRequest('/api/v1/panorama/machine-rooms'),
+    apiRequest('/api/v1/panorama/racks'),
+    apiRequest('/api/v1/panorama/physical-servers'),
+    apiRequest('/api/v1/panorama/virtual-machines'),
     apiRequest('/api/v1/tech-components'),
     apiRequest('/api/v1/panorama/app-tech-relations'),
     apiRequest('/api/v1/panorama/artifacts'),
     apiRequest('/api/v1/panorama/data-objects'),
     apiRequest('/api/v1/panorama/api-groups'),
     apiRequest('/api/v1/panorama/api-endpoints')
-  ]).then(([domains, systems, subsystems, applications, dependencies, dbClusters, mwClusters, dataCenters, lbDomains, otelServices, otelInstances, k8sClusters, k8sNamespaces, k8sContainers, techComponents, appTechRelations, artifacts, dataObjects, apiGroups, apiEndpoints]) => ({
+  ]).then(([domains, systems, subsystems, applications, dependencies, dbClusters, mwClusters, dataCenters, lbDomains, otelServices, otelInstances, k8sClusters, k8sNamespaces, k8sContainers, machineRooms, racks, physicalServers, virtualMachines, techComponents, appTechRelations, artifacts, dataObjects, apiGroups, apiEndpoints]) => ({
     domains: domains || [],
     systems: systems || [],
     subsystems: subsystems || [],
@@ -327,6 +339,10 @@ function fetchPanoramaAdminData() {
     k8sClusters: k8sClusters || [],
     k8sNamespaces: k8sNamespaces || [],
     k8sContainers: k8sContainers || [],
+    machineRooms: machineRooms || [],
+    racks: racks || [],
+    physicalServers: physicalServers || [],
+    virtualMachines: virtualMachines || [],
     techComponents: techComponents || [],
     appTechRelations: appTechRelations || [],
     artifacts: artifacts || [],
@@ -535,6 +551,42 @@ function defaultPanoramaEntityTemplate(entityType) {
       image: ''
     };
   }
+  if (entityType === 'machineRoom') {
+    return {
+      id: `room-${Date.now()}`,
+      dcId: data.dataCenters[0]?.id || '',
+      roomName: '新机房',
+      status: 'ACTIVE'
+    };
+  }
+  if (entityType === 'rack') {
+    return {
+      id: `rack-${Date.now()}`,
+      roomId: data.machineRooms[0]?.id || '',
+      rackName: '新机柜',
+      status: 'ACTIVE'
+    };
+  }
+  if (entityType === 'physicalServer') {
+    return {
+      id: `srv-${Date.now()}`,
+      rackId: data.racks[0]?.id || '',
+      serialNumber: `SN-${Date.now()}`,
+      osType: 'LINUX',
+      status: 'RUNNING'
+    };
+  }
+  if (entityType === 'virtualMachine') {
+    return {
+      id: `vm-${Date.now()}`,
+      serverId: data.physicalServers[0]?.id || '',
+      dcId: data.dataCenters[0]?.id || '',
+      ipAddress: '10.10.10.10',
+      osType: 'LINUX',
+      osDistribution: 'RHEL 8.6',
+      status: 'RUNNING'
+    };
+  }
   if (entityType === 'techComponent') {
     return {
       id: `comp-${Date.now()}`,
@@ -613,6 +665,10 @@ function findPanoramaEntity(entityType, id) {
   if (entityType === 'k8sCluster') return data.k8sClusters.find((x) => String(x.id) === String(id));
   if (entityType === 'k8sNamespace') return data.k8sNamespaces.find((x) => String(x.id) === String(id));
   if (entityType === 'k8sContainer') return data.k8sContainers.find((x) => String(x.id) === String(id));
+  if (entityType === 'machineRoom') return data.machineRooms.find((x) => String(x.id) === String(id));
+  if (entityType === 'rack') return data.racks.find((x) => String(x.id) === String(id));
+  if (entityType === 'physicalServer') return data.physicalServers.find((x) => String(x.id) === String(id));
+  if (entityType === 'virtualMachine') return data.virtualMachines.find((x) => String(x.id) === String(id));
   if (entityType === 'techComponent') return data.techComponents.find((x) => x.id === id);
   if (entityType === 'appTechRelation') return data.appTechRelations.find((x) => String(x.id) === String(id));
   if (entityType === 'artifact') return data.artifacts.find((x) => x.id === id);
@@ -872,6 +928,63 @@ function renderPanoramaAdminRows(entityType, data) {
       </td>
     </tr>`).join('');
   }
+  if (entityType === 'machineRoom') {
+    return (data.machineRooms || []).map((room) => `<tr>
+      <td><strong>${room.id}</strong></td>
+      <td>${room.roomName || '-'}</td>
+      <td>${room.dcName || room.dcId || '-'}</td>
+      <td>${room.status || '-'}</td>
+      <td>${room.racks || 0}</td>
+      <td>${room.servers || 0}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-outline" style="padding:4px 8px" onclick="editPanoramaEntityPrompt('machineRoom','${room.id}')">编辑</button>
+        <button class="btn btn-outline" style="padding:4px 8px;color:var(--red)" onclick="deletePanoramaEntity('machineRoom','${room.id}')">删除</button>
+      </td>
+    </tr>`).join('');
+  }
+  if (entityType === 'rack') {
+    return (data.racks || []).map((rack) => `<tr>
+      <td><strong>${rack.id}</strong></td>
+      <td>${rack.rackName || '-'}</td>
+      <td>${rack.roomName || rack.roomId || '-'}</td>
+      <td>${rack.dcName || rack.dcId || '-'}</td>
+      <td>${rack.status || '-'}</td>
+      <td>${rack.servers || 0}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-outline" style="padding:4px 8px" onclick="editPanoramaEntityPrompt('rack','${rack.id}')">编辑</button>
+        <button class="btn btn-outline" style="padding:4px 8px;color:var(--red)" onclick="deletePanoramaEntity('rack','${rack.id}')">删除</button>
+      </td>
+    </tr>`).join('');
+  }
+  if (entityType === 'physicalServer') {
+    return (data.physicalServers || []).map((server) => `<tr>
+      <td><strong>${server.id}</strong></td>
+      <td>${server.serialNumber || '-'}</td>
+      <td>${server.rackName || server.rackId || '-'}</td>
+      <td>${server.dcName || server.dcId || '-'}</td>
+      <td>${server.osType || '-'}</td>
+      <td>${server.status || '-'}</td>
+      <td>${server.vms || 0}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-outline" style="padding:4px 8px" onclick="editPanoramaEntityPrompt('physicalServer','${server.id}')">编辑</button>
+        <button class="btn btn-outline" style="padding:4px 8px;color:var(--red)" onclick="deletePanoramaEntity('physicalServer','${server.id}')">删除</button>
+      </td>
+    </tr>`).join('');
+  }
+  if (entityType === 'virtualMachine') {
+    return (data.virtualMachines || []).map((vm) => `<tr>
+      <td><strong>${vm.id}</strong></td>
+      <td>${vm.ipAddress || '-'}</td>
+      <td>${vm.serverId || '-'}</td>
+      <td>${vm.dcName || vm.dcId || '-'}</td>
+      <td>${vm.osType || '-'}</td>
+      <td>${vm.status || '-'}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-outline" style="padding:4px 8px" onclick="editPanoramaEntityPrompt('virtualMachine','${vm.id}')">编辑</button>
+        <button class="btn btn-outline" style="padding:4px 8px;color:var(--red)" onclick="deletePanoramaEntity('virtualMachine','${vm.id}')">删除</button>
+      </td>
+    </tr>`).join('');
+  }
   if (entityType === 'techComponent') {
     return (data.techComponents || []).map((comp) => `<tr>
       <td><strong>${comp.id}</strong></td>
@@ -994,6 +1107,10 @@ function renderPanoramaAdmin(c, b) {
     k8sClusters: [],
     k8sNamespaces: [],
     k8sContainers: [],
+    machineRooms: [],
+    racks: [],
+    physicalServers: [],
+    virtualMachines: [],
     techComponents: [],
     appTechRelations: [],
     artifacts: [],
@@ -1016,6 +1133,10 @@ function renderPanoramaAdmin(c, b) {
     { key: 'k8sCluster', label: `K8S集群 (${data.k8sClusters.length})` },
     { key: 'k8sNamespace', label: `K8S命名空间 (${data.k8sNamespaces.length})` },
     { key: 'k8sContainer', label: `K8S容器 (${data.k8sContainers.length})` },
+    { key: 'machineRoom', label: `机房 (${data.machineRooms.length})` },
+    { key: 'rack', label: `机柜 (${data.racks.length})` },
+    { key: 'physicalServer', label: `物理机 (${data.physicalServers.length})` },
+    { key: 'virtualMachine', label: `虚拟机 (${data.virtualMachines.length})` },
     { key: 'techComponent', label: `技术组件 (${data.techComponents.length})` },
     { key: 'appTechRelation', label: `应用技术关系 (${data.appTechRelations.length})` },
     { key: 'artifact', label: `制品 (${data.artifacts.length})` },
@@ -1051,6 +1172,14 @@ function renderPanoramaAdmin(c, b) {
                             ? '<tr><th>ID</th><th>命名空间</th><th>所属集群</th><th>环境</th><th>状态</th><th>容器数</th><th>操作</th></tr>'
                             : panoramaAdminEntity === 'k8sContainer'
                               ? '<tr><th>ID</th><th>Pod</th><th>命名空间</th><th>集群</th><th>VM</th><th>状态</th><th>操作</th></tr>'
+                              : panoramaAdminEntity === 'machineRoom'
+                                ? '<tr><th>ID</th><th>机房名</th><th>数据中心</th><th>状态</th><th>机柜数</th><th>物理机数</th><th>操作</th></tr>'
+                                : panoramaAdminEntity === 'rack'
+                                  ? '<tr><th>ID</th><th>机柜名</th><th>机房</th><th>数据中心</th><th>状态</th><th>物理机数</th><th>操作</th></tr>'
+                                  : panoramaAdminEntity === 'physicalServer'
+                                    ? '<tr><th>ID</th><th>序列号</th><th>机柜</th><th>数据中心</th><th>OS类型</th><th>状态</th><th>VM数</th><th>操作</th></tr>'
+                                    : panoramaAdminEntity === 'virtualMachine'
+                                      ? '<tr><th>ID</th><th>IP</th><th>物理机</th><th>数据中心</th><th>OS类型</th><th>状态</th><th>操作</th></tr>'
                         : panoramaAdminEntity === 'techComponent'
                           ? '<tr><th>ID</th><th>组件名</th><th>类别</th><th>生命周期</th><th>版本</th><th>供应商</th><th>状态</th><th>操作</th></tr>'
                           : panoramaAdminEntity === 'appTechRelation'

@@ -2204,6 +2204,113 @@ function normalizeContainerInput(raw, fallbackId) {
   };
 }
 
+function normalizeMachineRoomInput(raw, fallbackId) {
+  const id = String(raw?.id || raw?.roomId || fallbackId || '').trim();
+  const dcId = String(raw?.dcId || raw?.dc_id || '').trim();
+  const roomName = String(raw?.roomName || raw?.name || '').trim();
+  const status = String(raw?.status || 'ACTIVE').trim().toUpperCase();
+  if (!id) throw new HttpError(400, 'machine room id is required');
+  if (!dcId) throw new HttpError(400, 'machine room dcId is required');
+  if (!roomName) throw new HttpError(400, 'machine room roomName is required');
+  if (!['ACTIVE', 'INACTIVE'].includes(status)) {
+    throw new HttpError(400, 'machine room status must be one of: ACTIVE, INACTIVE');
+  }
+  return {
+    id,
+    dcId,
+    payload: {
+      roomId: id,
+      dcId,
+      roomName,
+      status
+    }
+  };
+}
+
+function normalizeRackInput(raw, fallbackId) {
+  const id = String(raw?.id || raw?.rackId || fallbackId || '').trim();
+  const roomId = String(raw?.roomId || raw?.room_id || '').trim();
+  const rackName = String(raw?.rackName || raw?.name || '').trim();
+  const status = String(raw?.status || 'ACTIVE').trim().toUpperCase();
+  if (!id) throw new HttpError(400, 'rack id is required');
+  if (!roomId) throw new HttpError(400, 'rack roomId is required');
+  if (!rackName) throw new HttpError(400, 'rack rackName is required');
+  if (!['ACTIVE', 'INACTIVE'].includes(status)) {
+    throw new HttpError(400, 'rack status must be one of: ACTIVE, INACTIVE');
+  }
+  return {
+    id,
+    roomId,
+    payload: {
+      rackId: id,
+      roomId,
+      rackName,
+      status
+    }
+  };
+}
+
+function normalizePhysicalServerInput(raw, fallbackId) {
+  const id = String(raw?.id || raw?.serverId || fallbackId || '').trim();
+  const rackId = String(raw?.rackId || raw?.rack_id || '').trim();
+  const serialNumber = String(raw?.serialNumber || '').trim();
+  const osType = String(raw?.osType || 'LINUX').trim().toUpperCase();
+  const status = String(raw?.status || 'RUNNING').trim().toUpperCase();
+  if (!id) throw new HttpError(400, 'physical server id is required');
+  if (!rackId) throw new HttpError(400, 'physical server rackId is required');
+  if (!serialNumber) throw new HttpError(400, 'physical server serialNumber is required');
+  if (!['LINUX', 'WINDOWS', 'AIX', 'UNIX', 'OTHER'].includes(osType)) {
+    throw new HttpError(400, 'physical server osType must be one of: LINUX, WINDOWS, AIX, UNIX, OTHER');
+  }
+  if (!['RUNNING', 'OFFLINE', 'MAINTENANCE'].includes(status)) {
+    throw new HttpError(400, 'physical server status must be one of: RUNNING, OFFLINE, MAINTENANCE');
+  }
+  return {
+    id,
+    rackId,
+    payload: {
+      serverId: id,
+      rackId,
+      serialNumber,
+      osType,
+      status
+    }
+  };
+}
+
+function normalizeVirtualMachineInput(raw, fallbackId) {
+  const id = String(raw?.id || raw?.vmId || fallbackId || '').trim();
+  const serverId = String(raw?.serverId || raw?.server_id || '').trim();
+  const dcIdRaw = raw?.dcId == null ? '' : String(raw.dcId).trim();
+  const ipAddress = String(raw?.ipAddress || '').trim();
+  const osType = String(raw?.osType || 'LINUX').trim().toUpperCase();
+  const osDistribution = String(raw?.osDistribution || '').trim();
+  const status = String(raw?.status || 'RUNNING').trim().toUpperCase();
+  if (!id) throw new HttpError(400, 'virtual machine id is required');
+  if (!serverId) throw new HttpError(400, 'virtual machine serverId is required');
+  if (!ipAddress) throw new HttpError(400, 'virtual machine ipAddress is required');
+  if (!['LINUX', 'WINDOWS', 'AIX', 'UNIX', 'OTHER'].includes(osType)) {
+    throw new HttpError(400, 'virtual machine osType must be one of: LINUX, WINDOWS, AIX, UNIX, OTHER');
+  }
+  if (!['RUNNING', 'STOPPED', 'OFFLINE'].includes(status)) {
+    throw new HttpError(400, 'virtual machine status must be one of: RUNNING, STOPPED, OFFLINE');
+  }
+  return {
+    id,
+    serverId,
+    dcId: dcIdRaw || null,
+    payload: {
+      vmId: id,
+      serverId,
+      dcId: dcIdRaw || null,
+      ipAddress,
+      osType,
+      osDistribution,
+      status
+    }
+  };
+}
+
 async function resolveDependencyNodePayload(client, nodeId) {
   const existing = await client.query('SELECT payload FROM dependency_nodes WHERE id = $1', [nodeId]);
   if (existing.rows.length) {
@@ -5284,6 +5391,466 @@ async function handleApi(req, res, url) {
       return true;
     }
     sendJson(res, 200, { id: containerId, deleted: true });
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/machine-rooms') {
+    const dcId = url.searchParams.get('dc_id');
+    const params = [];
+    let sql = `
+      SELECT
+        mr.id,
+        mr.dc_id,
+        mr.payload,
+        dc.payload AS dc_payload,
+        (SELECT COUNT(*)::int FROM racks rk WHERE rk.room_id = mr.id) AS racks,
+        (
+          SELECT COUNT(*)::int
+          FROM physical_servers ps
+          JOIN racks rk ON rk.id = ps.rack_id
+          WHERE rk.room_id = mr.id
+        ) AS servers
+      FROM machine_rooms mr
+      JOIN data_centers dc ON dc.id = mr.dc_id
+    `;
+    if (dcId) {
+      params.push(dcId);
+      sql += ` WHERE mr.dc_id = $${params.length}`;
+    }
+    sql += ' ORDER BY mr.id';
+    const { rows } = await pool.query(sql, params);
+    sendJson(
+      res,
+      200,
+      rows.map((row) => ({
+        ...row.payload,
+        id: row.id,
+        roomId: row.payload?.roomId || row.id,
+        dcId: row.dc_id,
+        dcName: row.dc_payload?.name || row.dc_id,
+        racks: row.racks || 0,
+        servers: row.servers || 0
+      }))
+    );
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/panorama/machine-rooms') {
+    const body = await readJsonBody(req);
+    const room = normalizeMachineRoomInput(body);
+    const dcRes = await pool.query('SELECT 1 FROM data_centers WHERE id = $1', [room.dcId]);
+    if (!dcRes.rows.length) throw new HttpError(400, `data center '${room.dcId}' does not exist`);
+    try {
+      await pool.query('INSERT INTO machine_rooms (id, dc_id, payload) VALUES ($1, $2, $3::jsonb)', [
+        room.id,
+        room.dcId,
+        JSON.stringify(room.payload)
+      ]);
+    } catch (error) {
+      if (String(error.code) === '23505') throw new HttpError(409, `machine room '${room.id}' already exists`);
+      throw error;
+    }
+    sendJson(res, 201, { id: room.id, ...room.payload });
+    return true;
+  }
+
+  const machineRoomItemMatch = url.pathname.match(/^\/api\/v1\/panorama\/machine-rooms\/([^/]+)$/);
+  if (req.method === 'PUT' && machineRoomItemMatch) {
+    const roomId = decodeURIComponent(machineRoomItemMatch[1]);
+    const body = await readJsonBody(req);
+    const current = await pool.query('SELECT dc_id, payload FROM machine_rooms WHERE id = $1', [roomId]);
+    if (!current.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'machine room not found' });
+      return true;
+    }
+    const merged = {
+      ...current.rows[0].payload,
+      ...body,
+      id: roomId,
+      roomId,
+      dcId: body?.dcId != null ? body.dcId : current.rows[0].dc_id
+    };
+    const room = normalizeMachineRoomInput(merged, roomId);
+    const dcRes = await pool.query('SELECT 1 FROM data_centers WHERE id = $1', [room.dcId]);
+    if (!dcRes.rows.length) throw new HttpError(400, `data center '${room.dcId}' does not exist`);
+    await pool.query('UPDATE machine_rooms SET dc_id = $2, payload = $3::jsonb, updated_at = now() WHERE id = $1', [
+      roomId,
+      room.dcId,
+      JSON.stringify(room.payload)
+    ]);
+    sendJson(res, 200, { id: roomId, ...room.payload });
+    return true;
+  }
+
+  if (req.method === 'DELETE' && machineRoomItemMatch) {
+    const roomId = decodeURIComponent(machineRoomItemMatch[1]);
+    const summaryRes = await pool.query(
+      `
+      SELECT
+        (SELECT COUNT(*)::int FROM racks WHERE room_id = $1) AS racks,
+        (SELECT COUNT(*)::int FROM physical_servers ps JOIN racks rk ON rk.id = ps.rack_id WHERE rk.room_id = $1) AS servers,
+        (
+          SELECT COUNT(*)::int
+          FROM virtual_machines vm
+          JOIN physical_servers ps ON ps.id = vm.server_id
+          JOIN racks rk ON rk.id = ps.rack_id
+          WHERE rk.room_id = $1
+        ) AS vms
+      `,
+      [roomId]
+    );
+    const deleted = await pool.query('DELETE FROM machine_rooms WHERE id = $1 RETURNING id', [roomId]);
+    if (!deleted.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'machine room not found' });
+      return true;
+    }
+    sendJson(res, 200, { id: roomId, deleted: true, cascade: summaryRes.rows[0] || {} });
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/racks') {
+    const roomId = url.searchParams.get('room_id');
+    const params = [];
+    let sql = `
+      SELECT
+        rk.id,
+        rk.room_id,
+        rk.payload,
+        mr.payload AS room_payload,
+        mr.dc_id,
+        dc.payload AS dc_payload,
+        (SELECT COUNT(*)::int FROM physical_servers ps WHERE ps.rack_id = rk.id) AS servers
+      FROM racks rk
+      JOIN machine_rooms mr ON mr.id = rk.room_id
+      JOIN data_centers dc ON dc.id = mr.dc_id
+    `;
+    if (roomId) {
+      params.push(roomId);
+      sql += ` WHERE rk.room_id = $${params.length}`;
+    }
+    sql += ' ORDER BY rk.id';
+    const { rows } = await pool.query(sql, params);
+    sendJson(
+      res,
+      200,
+      rows.map((row) => ({
+        ...row.payload,
+        id: row.id,
+        rackId: row.payload?.rackId || row.id,
+        roomId: row.room_id,
+        roomName: row.room_payload?.roomName || row.room_id,
+        dcId: row.dc_id,
+        dcName: row.dc_payload?.name || row.dc_id,
+        servers: row.servers || 0
+      }))
+    );
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/panorama/racks') {
+    const body = await readJsonBody(req);
+    const rack = normalizeRackInput(body);
+    const roomRes = await pool.query('SELECT 1 FROM machine_rooms WHERE id = $1', [rack.roomId]);
+    if (!roomRes.rows.length) throw new HttpError(400, `machine room '${rack.roomId}' does not exist`);
+    try {
+      await pool.query('INSERT INTO racks (id, room_id, payload) VALUES ($1, $2, $3::jsonb)', [
+        rack.id,
+        rack.roomId,
+        JSON.stringify(rack.payload)
+      ]);
+    } catch (error) {
+      if (String(error.code) === '23505') throw new HttpError(409, `rack '${rack.id}' already exists`);
+      throw error;
+    }
+    sendJson(res, 201, { id: rack.id, ...rack.payload });
+    return true;
+  }
+
+  const rackItemMatch = url.pathname.match(/^\/api\/v1\/panorama\/racks\/([^/]+)$/);
+  if (req.method === 'PUT' && rackItemMatch) {
+    const rackId = decodeURIComponent(rackItemMatch[1]);
+    const body = await readJsonBody(req);
+    const current = await pool.query('SELECT room_id, payload FROM racks WHERE id = $1', [rackId]);
+    if (!current.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'rack not found' });
+      return true;
+    }
+    const merged = {
+      ...current.rows[0].payload,
+      ...body,
+      id: rackId,
+      rackId,
+      roomId: body?.roomId != null ? body.roomId : current.rows[0].room_id
+    };
+    const rack = normalizeRackInput(merged, rackId);
+    const roomRes = await pool.query('SELECT 1 FROM machine_rooms WHERE id = $1', [rack.roomId]);
+    if (!roomRes.rows.length) throw new HttpError(400, `machine room '${rack.roomId}' does not exist`);
+    await pool.query('UPDATE racks SET room_id = $2, payload = $3::jsonb, updated_at = now() WHERE id = $1', [
+      rackId,
+      rack.roomId,
+      JSON.stringify(rack.payload)
+    ]);
+    sendJson(res, 200, { id: rackId, ...rack.payload });
+    return true;
+  }
+
+  if (req.method === 'DELETE' && rackItemMatch) {
+    const rackId = decodeURIComponent(rackItemMatch[1]);
+    const summaryRes = await pool.query(
+      `
+      SELECT
+        (SELECT COUNT(*)::int FROM physical_servers WHERE rack_id = $1) AS servers,
+        (SELECT COUNT(*)::int FROM virtual_machines vm JOIN physical_servers ps ON ps.id = vm.server_id WHERE ps.rack_id = $1) AS vms
+      `,
+      [rackId]
+    );
+    const deleted = await pool.query('DELETE FROM racks WHERE id = $1 RETURNING id', [rackId]);
+    if (!deleted.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'rack not found' });
+      return true;
+    }
+    sendJson(res, 200, { id: rackId, deleted: true, cascade: summaryRes.rows[0] || {} });
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/physical-servers') {
+    const rackId = url.searchParams.get('rack_id');
+    const params = [];
+    let sql = `
+      SELECT
+        ps.id,
+        ps.rack_id,
+        ps.payload,
+        rk.payload AS rack_payload,
+        rk.room_id,
+        mr.payload AS room_payload,
+        mr.dc_id,
+        dc.payload AS dc_payload,
+        (SELECT COUNT(*)::int FROM virtual_machines vm WHERE vm.server_id = ps.id) AS vms
+      FROM physical_servers ps
+      JOIN racks rk ON rk.id = ps.rack_id
+      JOIN machine_rooms mr ON mr.id = rk.room_id
+      JOIN data_centers dc ON dc.id = mr.dc_id
+    `;
+    if (rackId) {
+      params.push(rackId);
+      sql += ` WHERE ps.rack_id = $${params.length}`;
+    }
+    sql += ' ORDER BY ps.id';
+    const { rows } = await pool.query(sql, params);
+    sendJson(
+      res,
+      200,
+      rows.map((row) => ({
+        ...row.payload,
+        id: row.id,
+        serverId: row.payload?.serverId || row.id,
+        rackId: row.rack_id,
+        rackName: row.rack_payload?.rackName || row.rack_id,
+        roomId: row.room_id,
+        roomName: row.room_payload?.roomName || row.room_id,
+        dcId: row.dc_id,
+        dcName: row.dc_payload?.name || row.dc_id,
+        vms: row.vms || 0
+      }))
+    );
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/panorama/physical-servers') {
+    const body = await readJsonBody(req);
+    const server = normalizePhysicalServerInput(body);
+    const rackRes = await pool.query('SELECT 1 FROM racks WHERE id = $1', [server.rackId]);
+    if (!rackRes.rows.length) throw new HttpError(400, `rack '${server.rackId}' does not exist`);
+    try {
+      await pool.query('INSERT INTO physical_servers (id, rack_id, payload) VALUES ($1, $2, $3::jsonb)', [
+        server.id,
+        server.rackId,
+        JSON.stringify(server.payload)
+      ]);
+    } catch (error) {
+      if (String(error.code) === '23505') throw new HttpError(409, `physical server '${server.id}' already exists`);
+      throw error;
+    }
+    sendJson(res, 201, { id: server.id, ...server.payload });
+    return true;
+  }
+
+  const physicalServerItemMatch = url.pathname.match(/^\/api\/v1\/panorama\/physical-servers\/([^/]+)$/);
+  if (req.method === 'PUT' && physicalServerItemMatch) {
+    const serverId = decodeURIComponent(physicalServerItemMatch[1]);
+    const body = await readJsonBody(req);
+    const current = await pool.query('SELECT rack_id, payload FROM physical_servers WHERE id = $1', [serverId]);
+    if (!current.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'physical server not found' });
+      return true;
+    }
+    const merged = {
+      ...current.rows[0].payload,
+      ...body,
+      id: serverId,
+      serverId,
+      rackId: body?.rackId != null ? body.rackId : current.rows[0].rack_id
+    };
+    const server = normalizePhysicalServerInput(merged, serverId);
+    const rackRes = await pool.query('SELECT 1 FROM racks WHERE id = $1', [server.rackId]);
+    if (!rackRes.rows.length) throw new HttpError(400, `rack '${server.rackId}' does not exist`);
+    await pool.query('UPDATE physical_servers SET rack_id = $2, payload = $3::jsonb, updated_at = now() WHERE id = $1', [
+      serverId,
+      server.rackId,
+      JSON.stringify(server.payload)
+    ]);
+    sendJson(res, 200, { id: serverId, ...server.payload });
+    return true;
+  }
+
+  if (req.method === 'DELETE' && physicalServerItemMatch) {
+    const serverId = decodeURIComponent(physicalServerItemMatch[1]);
+    const summaryRes = await pool.query('SELECT COUNT(*)::int AS vms FROM virtual_machines WHERE server_id = $1', [serverId]);
+    const deleted = await pool.query('DELETE FROM physical_servers WHERE id = $1 RETURNING id', [serverId]);
+    if (!deleted.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'physical server not found' });
+      return true;
+    }
+    sendJson(res, 200, { id: serverId, deleted: true, cascade: summaryRes.rows[0] || {} });
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/virtual-machines') {
+    const serverId = url.searchParams.get('server_id');
+    const dcId = url.searchParams.get('dc_id');
+    const params = [];
+    const conditions = [];
+    let sql = `
+      SELECT
+        vm.id,
+        vm.server_id,
+        vm.dc_id,
+        vm.payload,
+        ps.payload AS server_payload,
+        ps.rack_id,
+        rk.payload AS rack_payload,
+        rk.room_id,
+        mr.payload AS room_payload,
+        mr.dc_id AS room_dc_id,
+        dc.payload AS dc_payload
+      FROM virtual_machines vm
+      JOIN physical_servers ps ON ps.id = vm.server_id
+      JOIN racks rk ON rk.id = ps.rack_id
+      JOIN machine_rooms mr ON mr.id = rk.room_id
+      JOIN data_centers dc ON dc.id = mr.dc_id
+    `;
+    if (serverId) {
+      params.push(serverId);
+      conditions.push(`vm.server_id = $${params.length}`);
+    }
+    if (dcId) {
+      params.push(dcId);
+      conditions.push(`COALESCE(vm.dc_id, mr.dc_id) = $${params.length}`);
+    }
+    if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
+    sql += ' ORDER BY vm.id';
+    const { rows } = await pool.query(sql, params);
+    sendJson(
+      res,
+      200,
+      rows.map((row) => ({
+        ...row.payload,
+        id: row.id,
+        vmId: row.payload?.vmId || row.id,
+        serverId: row.server_id,
+        serverSerialNumber: row.server_payload?.serialNumber || null,
+        rackId: row.rack_id,
+        rackName: row.rack_payload?.rackName || row.rack_id,
+        roomId: row.room_id,
+        roomName: row.room_payload?.roomName || row.room_id,
+        dcId: row.dc_id || row.room_dc_id,
+        dcName: row.dc_payload?.name || row.room_dc_id
+      }))
+    );
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/panorama/virtual-machines') {
+    const body = await readJsonBody(req);
+    const vm = normalizeVirtualMachineInput(body);
+    const serverRes = await pool.query(
+      `
+      SELECT ps.id, mr.dc_id
+      FROM physical_servers ps
+      JOIN racks rk ON rk.id = ps.rack_id
+      JOIN machine_rooms mr ON mr.id = rk.room_id
+      WHERE ps.id = $1
+      `,
+      [vm.serverId]
+    );
+    if (!serverRes.rows.length) throw new HttpError(400, `physical server '${vm.serverId}' does not exist`);
+    const resolvedDcId = vm.dcId || serverRes.rows[0].dc_id;
+    try {
+      const payload = { ...vm.payload, dcId: resolvedDcId };
+      await pool.query('INSERT INTO virtual_machines (id, server_id, dc_id, payload) VALUES ($1, $2, $3, $4::jsonb)', [
+        vm.id,
+        vm.serverId,
+        resolvedDcId,
+        JSON.stringify(payload)
+      ]);
+      sendJson(res, 201, { id: vm.id, ...payload });
+    } catch (error) {
+      if (String(error.code) === '23505') throw new HttpError(409, `virtual machine '${vm.id}' already exists`);
+      throw error;
+    }
+    return true;
+  }
+
+  const virtualMachineItemMatch = url.pathname.match(/^\/api\/v1\/panorama\/virtual-machines\/([^/]+)$/);
+  if (req.method === 'PUT' && virtualMachineItemMatch) {
+    const vmId = decodeURIComponent(virtualMachineItemMatch[1]);
+    const body = await readJsonBody(req);
+    const current = await pool.query('SELECT server_id, dc_id, payload FROM virtual_machines WHERE id = $1', [vmId]);
+    if (!current.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'virtual machine not found' });
+      return true;
+    }
+    const merged = {
+      ...current.rows[0].payload,
+      ...body,
+      id: vmId,
+      vmId,
+      serverId: body?.serverId != null ? body.serverId : current.rows[0].server_id,
+      dcId: body?.dcId != null ? body.dcId : current.rows[0].dc_id
+    };
+    const vm = normalizeVirtualMachineInput(merged, vmId);
+    const serverRes = await pool.query(
+      `
+      SELECT ps.id, mr.dc_id
+      FROM physical_servers ps
+      JOIN racks rk ON rk.id = ps.rack_id
+      JOIN machine_rooms mr ON mr.id = rk.room_id
+      WHERE ps.id = $1
+      `,
+      [vm.serverId]
+    );
+    if (!serverRes.rows.length) throw new HttpError(400, `physical server '${vm.serverId}' does not exist`);
+    const resolvedDcId = vm.dcId || serverRes.rows[0].dc_id;
+    const payload = { ...vm.payload, dcId: resolvedDcId };
+    await pool.query('UPDATE virtual_machines SET server_id = $2, dc_id = $3, payload = $4::jsonb, updated_at = now() WHERE id = $1', [
+      vmId,
+      vm.serverId,
+      resolvedDcId,
+      JSON.stringify(payload)
+    ]);
+    sendJson(res, 200, { id: vmId, ...payload });
+    return true;
+  }
+
+  if (req.method === 'DELETE' && virtualMachineItemMatch) {
+    const vmId = decodeURIComponent(virtualMachineItemMatch[1]);
+    const deleted = await pool.query('DELETE FROM virtual_machines WHERE id = $1 RETURNING id', [vmId]);
+    if (!deleted.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'virtual machine not found' });
+      return true;
+    }
+    sendJson(res, 200, { id: vmId, deleted: true });
     return true;
   }
 

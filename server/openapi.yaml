@@ -995,6 +995,185 @@ paths:
       responses:
         '200': { description: Delete result }
 
+  /api/v1/panorama/machine-rooms:
+    get:
+      summary: List panorama machine rooms
+      parameters:
+        - in: query
+          name: dc_id
+          schema: { type: string }
+      responses:
+        '200': { description: Machine room list }
+    post:
+      summary: Create panorama machine room
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created machine room }
+
+  /api/v1/panorama/machine-rooms/{id}:
+    put:
+      summary: Update panorama machine room
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated machine room }
+    delete:
+      summary: Delete panorama machine room
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Delete result }
+
+  /api/v1/panorama/racks:
+    get:
+      summary: List panorama racks
+      parameters:
+        - in: query
+          name: room_id
+          schema: { type: string }
+      responses:
+        '200': { description: Rack list }
+    post:
+      summary: Create panorama rack
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created rack }
+
+  /api/v1/panorama/racks/{id}:
+    put:
+      summary: Update panorama rack
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated rack }
+    delete:
+      summary: Delete panorama rack
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Delete result }
+
+  /api/v1/panorama/physical-servers:
+    get:
+      summary: List panorama physical servers
+      parameters:
+        - in: query
+          name: rack_id
+          schema: { type: string }
+      responses:
+        '200': { description: Physical server list }
+    post:
+      summary: Create panorama physical server
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created physical server }
+
+  /api/v1/panorama/physical-servers/{id}:
+    put:
+      summary: Update panorama physical server
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated physical server }
+    delete:
+      summary: Delete panorama physical server
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Delete result }
+
+  /api/v1/panorama/virtual-machines:
+    get:
+      summary: List panorama virtual machines
+      parameters:
+        - in: query
+          name: server_id
+          schema: { type: string }
+        - in: query
+          name: dc_id
+          schema: { type: string }
+      responses:
+        '200': { description: Virtual machine list }
+    post:
+      summary: Create panorama virtual machine
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created virtual machine }
+
+  /api/v1/panorama/virtual-machines/{id}:
+    put:
+      summary: Update panorama virtual machine
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated virtual machine }
+    delete:
+      summary: Delete panorama virtual machine
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Delete result }
+
   /api/v1/panorama/artifacts:
     get:
       summary: List panorama artifacts
