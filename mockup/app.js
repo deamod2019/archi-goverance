@@ -42,6 +42,104 @@ function getStandardsCatalog() {
 function ensureStandardsCatalog() {
   return ensureViewData('standardsCatalog', () => apiRequest('/api/v1/standards'));
 }
+async function reloadStandardsCatalog() {
+  delete VIEW_CACHE.standardsCatalog;
+  await ensureStandardsCatalog();
+  try {
+    RULE_STD_MAP = await apiRequest('/api/v1/standards/rule-map');
+  } catch { }
+}
+async function reloadStandardsAndRender() {
+  try {
+    await reloadStandardsCatalog();
+    if (currentView === 'standards') render();
+  } catch (error) {
+    alert(`刷新规范失败：${error.message}`);
+  }
+}
+function syncAppInLocalCache(updatedApp) {
+  Object.keys(MOCK.apps || {}).forEach((subId) => {
+    const list = MOCK.apps[subId] || [];
+    const idx = list.findIndex((x) => x.id === updatedApp.id);
+    if (idx >= 0) list[idx] = { ...list[idx], ...updatedApp };
+  });
+}
+async function editCurrentAppProfilePrompt() {
+  if (!v1App?.id) return;
+  const initial = {
+    name: v1App.name,
+    owner: v1App.owner,
+    status: v1App.status,
+    tags: Array.isArray(v1App.tags) ? v1App.tags : [],
+    classification: v1App.classification,
+    securityLevel: v1App.securityLevel,
+    dataLevel: v1App.dataLevel,
+    gitRepo: v1App.gitRepo
+  };
+  const text = prompt('请输入应用画像PATCH JSON（只填要改的字段）', JSON.stringify(initial, null, 2));
+  if (text == null) return;
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    alert('JSON格式错误');
+    return;
+  }
+  try {
+    const appId = encodeURIComponent(v1App.id);
+    const updated = await apiRequest(`/api/v1/panorama/applications/${appId}/profile`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload)
+    });
+    if (updated?.profile) {
+      v1App = updated.profile;
+      syncAppInLocalCache(updated.profile);
+    }
+    delete VIEW_CACHE[`v1-app-${v1App.id}`];
+    render();
+  } catch (error) {
+    alert(`更新应用画像失败：${error.message}`);
+  }
+}
+async function bindTechComponentToCurrentAppPrompt() {
+  if (!v1App?.id) return;
+  const componentId = prompt('请输入要绑定的技术组件ID（如 comp-java-17）', '');
+  if (!componentId) return;
+  const relationText = prompt('可选：请输入relation JSON', '{"usageType":"RUNTIME_DEP"}');
+  let relation = {};
+  if (relationText && relationText.trim()) {
+    try {
+      relation = JSON.parse(relationText);
+    } catch {
+      alert('relation JSON格式错误');
+      return;
+    }
+  }
+  try {
+    await apiRequest(`/api/v1/applications/${encodeURIComponent(v1App.id)}/tech-components`, {
+      method: 'POST',
+      body: JSON.stringify({ componentId: componentId.trim(), relation })
+    });
+    delete VIEW_CACHE[`v1-app-${v1App.id}`];
+    render();
+  } catch (error) {
+    alert(`绑定技术组件失败：${error.message}`);
+  }
+}
+async function unbindTechComponentFromCurrentAppPrompt() {
+  if (!v1App?.id) return;
+  const componentId = prompt('请输入要解除绑定的技术组件ID', '');
+  if (!componentId) return;
+  try {
+    await apiRequest(`/api/v1/applications/${encodeURIComponent(v1App.id)}/tech-components/${encodeURIComponent(componentId.trim())}`, {
+      method: 'DELETE'
+    });
+    delete VIEW_CACHE[`v1-app-${v1App.id}`];
+    render();
+  } catch (error) {
+    alert(`解除绑定失败：${error.message}`);
+  }
+}
 function showPersonPopup(name) {
   const p = PERSONS[name]; if (!p) return;
   closePopup();
@@ -241,6 +339,12 @@ function renderV1Domain(c, b) {
         <div class="attr"><span class="lbl">健康状态</span><span class="tag ${d.health === 'good' ? 'tag-running' : 'tag-important'}">${d.health === 'good' ? '●健康' : '●告警'}</span></div>
       </div>
     </div>
+  </div>`;
+  html += `<div class="fade-in" style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">
+    <button class="btn btn-outline" onclick="stdDetailId=null;render()">← 返回目录</button>
+    <button class="btn btn-primary" onclick="editStandardFromPrompt('${std.id}')">✏️ 编辑规范</button>
+    <button class="btn btn-outline" onclick="addRuleToStandardPrompt('${std.id}')">+ 新增规则</button>
+    <button class="btn btn-outline" onclick="deleteStandardById('${std.id}')" style="color:var(--red)">🗑 删除规范</button>
   </div>`;
 
   // Stats
@@ -517,7 +621,12 @@ function renderV1Profile(c, b) {
       <div class="profile-row" style="margin-top:8px"><span class="lbl">结果汇总</span><span>${compliance.summary?.passed || 0}/${compliance.summary?.total || 0} 通过</span></div>
     </div>
   </div>
-  <div style="margin-top:16px" class="fade-in"><button class="btn btn-primary btn-lg" onclick="switchView('v2')">🔗 查看依赖图</button></div>`;
+  <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap" class="fade-in">
+    <button class="btn btn-primary btn-lg" onclick="switchView('v2')">🔗 查看依赖图</button>
+    <button class="btn btn-outline" onclick="editCurrentAppProfilePrompt()">✏️ 编辑画像</button>
+    <button class="btn btn-outline" onclick="bindTechComponentToCurrentAppPrompt()">🧩 绑定技术组件</button>
+    <button class="btn btn-outline" onclick="unbindTechComponentFromCurrentAppPrompt()">🧹 解除组件绑定</button>
+  </div>`;
 }
 
 // ========== V2: Dependency Graph ==========
@@ -1348,6 +1457,167 @@ function renderDashboard(c, b) {
 
 // ========== Standards View ==========
 let stdDetailId = null;
+async function createStandardFromPrompt() {
+  const template = {
+    id: 'STD-NEW',
+    name: '新规范名称',
+    code: 'STD-NEW-V1.0',
+    category: '应用架构',
+    version: 'V1.0',
+    status: 'DRAFT',
+    owner: '孙磊',
+    approver: 'CTO办公室',
+    description: '请修改为规范描述',
+    icon: '📘',
+    publishDate: '2026-02-14',
+    effectiveDate: '2026-02-14',
+    chapters: [{ title: '第一章 总则', content: '请填写章节内容' }],
+    rules: [
+      {
+        id: 'R-NEW-1',
+        name: '示例规则',
+        level: 'MAJOR',
+        checkMethod: '评审',
+        description: '请填写规则说明',
+        checkScript: 'N/A'
+      }
+    ]
+  };
+  const text = prompt('请输入新规范JSON', JSON.stringify(template, null, 2));
+  if (text == null) return;
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    alert('JSON格式错误');
+    return;
+  }
+  try {
+    const saved = await apiRequest('/api/v1/standards', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    await reloadStandardsCatalog();
+    stdDetailId = saved.id;
+    render();
+  } catch (error) {
+    alert(`创建规范失败：${error.message}`);
+  }
+}
+async function editStandardFromPrompt(stdId) {
+  try {
+    const current = await apiRequest(`/api/v1/standards/${encodeURIComponent(stdId)}`);
+    const patchText = prompt('请输入规范更新JSON（可部分字段）', JSON.stringify({
+      name: current.name,
+      version: current.version,
+      status: current.status,
+      description: current.description
+    }, null, 2));
+    if (patchText == null) return;
+    let patch;
+    try {
+      patch = JSON.parse(patchText);
+    } catch {
+      alert('JSON格式错误');
+      return;
+    }
+    await apiRequest(`/api/v1/standards/${encodeURIComponent(stdId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(patch)
+    });
+    await reloadStandardsCatalog();
+    stdDetailId = stdId;
+    render();
+  } catch (error) {
+    alert(`更新规范失败：${error.message}`);
+  }
+}
+async function deleteStandardById(stdId) {
+  if (!confirm(`确认删除规范 ${stdId} 吗？`)) return;
+  try {
+    await apiRequest(`/api/v1/standards/${encodeURIComponent(stdId)}`, { method: 'DELETE' });
+    await reloadStandardsCatalog();
+    stdDetailId = null;
+    render();
+  } catch (error) {
+    alert(`删除规范失败：${error.message}`);
+  }
+}
+async function addRuleToStandardPrompt(stdId) {
+  const template = {
+    id: 'R-NEW',
+    name: '新规则名称',
+    level: 'MAJOR',
+    checkMethod: '评审',
+    description: '请填写规则说明',
+    checkScript: 'N/A'
+  };
+  const text = prompt(`请输入要新增到 ${stdId} 的规则JSON`, JSON.stringify(template, null, 2));
+  if (text == null) return;
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    alert('JSON格式错误');
+    return;
+  }
+  try {
+    await apiRequest(`/api/v1/standards/${encodeURIComponent(stdId)}/rules`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    await reloadStandardsCatalog();
+    stdDetailId = stdId;
+    render();
+  } catch (error) {
+    alert(`新增规则失败：${error.message}`);
+  }
+}
+async function editRuleOfStandardPrompt(stdId, ruleId) {
+  const standard = getStandardsCatalog().find((s) => s.id === stdId);
+  const rule = (standard?.rules || []).find((r) => r.id === ruleId);
+  const base = rule || {
+    id: ruleId,
+    name: '',
+    level: 'MAJOR',
+    checkMethod: '评审',
+    description: '',
+    checkScript: ''
+  };
+  const text = prompt(`请输入规则 ${ruleId} 更新JSON`, JSON.stringify(base, null, 2));
+  if (text == null) return;
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    alert('JSON格式错误');
+    return;
+  }
+  try {
+    await apiRequest(`/api/v1/standards/${encodeURIComponent(stdId)}/rules/${encodeURIComponent(ruleId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload)
+    });
+    await reloadStandardsCatalog();
+    stdDetailId = stdId;
+    render();
+  } catch (error) {
+    alert(`更新规则失败：${error.message}`);
+  }
+}
+async function deleteRuleFromStandard(stdId, ruleId) {
+  if (!confirm(`确认删除规则 ${ruleId} 吗？`)) return;
+  try {
+    await apiRequest(`/api/v1/standards/${encodeURIComponent(stdId)}/rules/${encodeURIComponent(ruleId)}`, {
+      method: 'DELETE'
+    });
+    await reloadStandardsCatalog();
+    stdDetailId = stdId;
+    render();
+  } catch (error) {
+    alert(`删除规则失败：${error.message}`);
+  }
+}
 function renderStandards(c, b) {
   if (stdDetailId) { renderStandardDetail(c, b, stdDetailId); return; }
   b.innerHTML = '<span onclick="switchView(\'v1\')">全景图</span> &gt; 架构规范';
@@ -1378,6 +1648,10 @@ function renderStandards(c, b) {
     <div class="stat-card"><div class="label">评审检查</div><div class="value">${methods['评审'] || 0}</div><div class="sub">条</div></div>
     <div class="stat-card"><div class="label">测试检查</div><div class="value">${methods['测试'] || 0}</div><div class="sub">条</div></div>
     <div class="stat-card"><div class="label">巡检检查</div><div class="value">${methods['巡检'] || 0}</div><div class="sub">条</div></div>
+  </div>`;
+  html += `<div class="fade-in" style="display:flex;gap:10px;flex-wrap:wrap;margin:14px 0 8px">
+    <button class="btn btn-primary" onclick="createStandardFromPrompt()">+ 新建规范</button>
+    <button class="btn btn-outline" onclick="reloadStandardsAndRender()">↻ 刷新目录</button>
   </div>`;
   // Group by category
   const cats = {};
@@ -1458,11 +1732,11 @@ function renderStandardDetail(c, b, stdId) {
 
   // Rules table
   html += `<h3 style="margin:24px 0 12px;font-size:15px" class="fade-in">📋 关联检查规则 (${std.rules.length})</h3>
-  <table class="review-table fade-in" id="rulesTable"><thead><tr><th>规则编号</th><th>规则名称</th><th>级别</th><th>检查方式</th><th>说明</th></tr></thead><tbody>`;
+  <table class="review-table fade-in" id="rulesTable"><thead><tr><th>规则编号</th><th>规则名称</th><th>级别</th><th>检查方式</th><th>说明</th><th>操作</th></tr></thead><tbody>`;
   std.rules.forEach(r => {
     const lvlCls = r.level === 'CRITICAL' ? 'tag-core' : r.level === 'MAJOR' ? 'tag-important' : 'tag-general';
     const methodCls = r.checkMethod === '评审' ? 'check-review' : r.checkMethod === '测试' ? 'check-test' : 'check-patrol';
-    html += `<tr id="rule-${r.id}"><td><strong>${r.id}</strong></td><td>${r.name}</td><td><span class="tag ${lvlCls}">${r.level}</span></td><td><span class="check-method ${methodCls}">${r.checkMethod}</span></td><td style="font-size:12px;color:var(--text2)">${r.description}</td></tr>`;
+    html += `<tr id="rule-${r.id}"><td><strong>${r.id}</strong></td><td>${r.name}</td><td><span class="tag ${lvlCls}">${r.level}</span></td><td><span class="check-method ${methodCls}">${r.checkMethod}</span></td><td style="font-size:12px;color:var(--text2)">${r.description}</td><td style="white-space:nowrap"><button class="btn btn-outline" style="padding:4px 8px" onclick="event.stopPropagation();editRuleOfStandardPrompt('${std.id}','${r.id}')">编辑</button> <button class="btn btn-outline" style="padding:4px 8px;color:var(--red)" onclick="event.stopPropagation();deleteRuleFromStandard('${std.id}','${r.id}')">删除</button></td></tr>`;
   });
   html += '</tbody></table>';
 
