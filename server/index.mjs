@@ -27,7 +27,7 @@ const pool = new Pool(
 
 const STARTUP_DB_RETRIES = Number.parseInt(process.env.STARTUP_DB_RETRIES || '30', 10);
 const STARTUP_DB_RETRY_MS = Number.parseInt(process.env.STARTUP_DB_RETRY_MS || '2000', 10);
-const API_VERSION = process.env.API_VERSION || '1.2.0';
+const API_VERSION = process.env.API_VERSION || '1.3.0';
 const APP_REVISION =
   process.env.RENDER_GIT_COMMIT ||
   process.env.RENDER_GIT_BRANCH_COMMIT ||
@@ -259,6 +259,123 @@ async function initSchema() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    CREATE TABLE IF NOT EXISTS capabilities (
+      id TEXT PRIMARY KEY,
+      domain_id TEXT NOT NULL REFERENCES domains(id) ON DELETE CASCADE,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS processes (
+      id TEXT PRIMARY KEY,
+      capability_id TEXT NOT NULL REFERENCES capabilities(id) ON DELETE CASCADE,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS subject_areas (
+      id TEXT PRIMARY KEY,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS logical_entities (
+      id TEXT PRIMARY KEY,
+      subject_area_id TEXT NOT NULL REFERENCES subject_areas(id) ON DELETE CASCADE,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS data_objects (
+      id TEXT PRIMARY KEY,
+      app_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+      logical_entity_id TEXT REFERENCES logical_entities(id) ON DELETE SET NULL,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS tech_components (
+      id TEXT PRIMARY KEY,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS app_tech_rel (
+      id BIGSERIAL PRIMARY KEY,
+      app_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+      component_id TEXT NOT NULL REFERENCES tech_components(id) ON DELETE CASCADE,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS artifacts (
+      id TEXT PRIMARY KEY,
+      app_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS otel_services (
+      id TEXT PRIMARY KEY,
+      app_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS otel_instances (
+      id TEXT PRIMARY KEY,
+      service_id TEXT NOT NULL REFERENCES otel_services(id) ON DELETE CASCADE,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS lb_clusters (
+      id TEXT PRIMARY KEY,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS lb_devices (
+      id TEXT PRIMARY KEY,
+      cluster_id TEXT NOT NULL REFERENCES lb_clusters(id) ON DELETE CASCADE,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS lb_service_pools (
+      id TEXT PRIMARY KEY,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS lb_pool_members (
+      id TEXT PRIMARY KEY,
+      pool_id TEXT NOT NULL REFERENCES lb_service_pools(id) ON DELETE CASCADE,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS lb_domains (
+      id TEXT PRIMARY KEY,
+      pool_id TEXT NOT NULL REFERENCES lb_service_pools(id) ON DELETE CASCADE,
+      payload JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
     CREATE INDEX IF NOT EXISTS idx_systems_domain_id ON systems(domain_id);
     CREATE INDEX IF NOT EXISTS idx_subsystems_system_id ON subsystems(system_id);
     CREATE INDEX IF NOT EXISTS idx_applications_subsystem_id ON applications(subsystem_id);
@@ -273,6 +390,19 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_middleware_instances_cluster_id ON middleware_instances(cluster_id);
     CREATE INDEX IF NOT EXISTS idx_middleware_cluster_apps_cluster_id ON middleware_cluster_apps(cluster_id);
     CREATE INDEX IF NOT EXISTS idx_drift_events_event_type ON drift_events(event_type);
+    CREATE INDEX IF NOT EXISTS idx_capabilities_domain_id ON capabilities(domain_id);
+    CREATE INDEX IF NOT EXISTS idx_processes_capability_id ON processes(capability_id);
+    CREATE INDEX IF NOT EXISTS idx_logical_entities_subject_area_id ON logical_entities(subject_area_id);
+    CREATE INDEX IF NOT EXISTS idx_data_objects_app_id ON data_objects(app_id);
+    CREATE INDEX IF NOT EXISTS idx_data_objects_logical_entity_id ON data_objects(logical_entity_id);
+    CREATE INDEX IF NOT EXISTS idx_app_tech_rel_app_id ON app_tech_rel(app_id);
+    CREATE INDEX IF NOT EXISTS idx_app_tech_rel_component_id ON app_tech_rel(component_id);
+    CREATE INDEX IF NOT EXISTS idx_artifacts_app_id ON artifacts(app_id);
+    CREATE INDEX IF NOT EXISTS idx_otel_services_app_id ON otel_services(app_id);
+    CREATE INDEX IF NOT EXISTS idx_otel_instances_service_id ON otel_instances(service_id);
+    CREATE INDEX IF NOT EXISTS idx_lb_devices_cluster_id ON lb_devices(cluster_id);
+    CREATE INDEX IF NOT EXISTS idx_lb_domains_pool_id ON lb_domains(pool_id);
+    CREATE INDEX IF NOT EXISTS idx_lb_pool_members_pool_id ON lb_pool_members(pool_id);
   `);
 }
 
@@ -294,7 +424,7 @@ async function upsertMockSections(client, seedData) {
 }
 
 async function reseedStructuredData(client, seedData) {
-  await client.query('TRUNCATE TABLE review_checks, reviews, dependencies, dependency_nodes, applications, subsystems, systems, domains, compliance_rules, data_centers, database_instances, database_cluster_apps, database_dr, database_clusters, middleware_instances, middleware_cluster_apps, middleware_clusters, tech_standards, drift_events, traffic_chains RESTART IDENTITY CASCADE');
+  await client.query('TRUNCATE TABLE review_checks, reviews, dependencies, dependency_nodes, data_objects, app_tech_rel, artifacts, otel_instances, otel_services, lb_domains, lb_pool_members, lb_service_pools, lb_devices, lb_clusters, applications, subsystems, processes, capabilities, logical_entities, subject_areas, systems, domains, compliance_rules, data_centers, database_instances, database_cluster_apps, database_dr, database_clusters, middleware_instances, middleware_cluster_apps, middleware_clusters, tech_components, tech_standards, drift_events, traffic_chains RESTART IDENTITY CASCADE');
 
   for (const domain of seedData.MOCK.domains || []) {
     await client.query('INSERT INTO domains (id, payload) VALUES ($1, $2::jsonb)', [domain.id, JSON.stringify(domain)]);
@@ -466,8 +596,237 @@ async function reseedStructuredData(client, seedData) {
     await client.query('INSERT INTO drift_events (event_type, payload) VALUES ($1, $2::jsonb)', ['ZOMBIE_DEPENDENCY', JSON.stringify(event)]);
   }
 
+  for (const domain of seedData.MOCK.domains || []) {
+    const capabilityId = `cap-${domain.id}-core`;
+    const capabilityPayload = {
+      capabilityId,
+      capabilityName: `${domain.name}核心能力`,
+      domainId: domain.id,
+      maturityLevel: domain.health === 'good' ? 'OPTIMIZED' : 'MANAGED'
+    };
+    await client.query(
+      'INSERT INTO capabilities (id, domain_id, payload) VALUES ($1, $2, $3::jsonb)',
+      [capabilityId, domain.id, JSON.stringify(capabilityPayload)]
+    );
+
+    const processId = `proc-${domain.id}-e2e`;
+    const processPayload = {
+      processId,
+      processName: `${domain.name}端到端流程`,
+      capabilityId,
+      processType: domain.priority === 'P0' ? 'CORE' : 'SUPPORT'
+    };
+    await client.query(
+      'INSERT INTO processes (id, capability_id, payload) VALUES ($1, $2, $3::jsonb)',
+      [processId, capabilityId, JSON.stringify(processPayload)]
+    );
+  }
+
+  const subjectAreas = [
+    { id: 'sa-customer', name: '客户', description: '客户主数据与客户关系信息' },
+    { id: 'sa-product', name: '产品', description: '银行产品与服务目录信息' },
+    { id: 'sa-trade', name: '交易', description: '交易、账务与流水信息' }
+  ];
+  for (const area of subjectAreas) {
+    await client.query('INSERT INTO subject_areas (id, payload) VALUES ($1, $2::jsonb)', [area.id, JSON.stringify(area)]);
+  }
+
+  const logicalEntities = [
+    { id: 'le-customer-profile', subjectAreaId: 'sa-customer', name: '客户画像', entityType: 'MASTER' },
+    { id: 'le-customer-account', subjectAreaId: 'sa-customer', name: '客户账户', entityType: 'MASTER' },
+    { id: 'le-product-catalog', subjectAreaId: 'sa-product', name: '产品目录', entityType: 'REFERENCE' },
+    { id: 'le-pricing-rule', subjectAreaId: 'sa-product', name: '定价规则', entityType: 'REFERENCE' },
+    { id: 'le-transaction-ledger', subjectAreaId: 'sa-trade', name: '交易总账', entityType: 'TRANSACTIONAL' },
+    { id: 'le-payment-order', subjectAreaId: 'sa-trade', name: '支付指令', entityType: 'TRANSACTIONAL' }
+  ];
+  for (const entity of logicalEntities) {
+    await client.query(
+      'INSERT INTO logical_entities (id, subject_area_id, payload) VALUES ($1, $2, $3::jsonb)',
+      [entity.id, entity.subjectAreaId, JSON.stringify(entity)]
+    );
+  }
+
+  const components = new Map();
+  for (const standard of seedData.MOCK.techStandards || []) {
+    const componentId = `comp-${toStableId('k', standard.name).replace(/^k-/, '')}`;
+    const componentType = standard.category === '数据库'
+      ? 'DATABASE'
+      : standard.category === '缓存'
+        ? 'CACHE'
+      : standard.category === '消息'
+        ? 'MQ'
+        : standard.category === '前端'
+          ? 'OTHER'
+          : 'OTHER';
+    components.set(componentId, {
+      id: componentId,
+      componentType,
+      productName: standard.name,
+      lifecycle: standard.lifecycle
+    });
+  }
+  for (const cluster of seedData.MOCK.dbClusters || []) {
+    const componentId = `comp-db-${toStableId('t', cluster.type).replace(/^t-/, '')}`;
+    components.set(componentId, {
+      id: componentId,
+      componentType: 'DATABASE',
+      productName: cluster.type,
+      lifecycle: cluster.dr === 'none' ? 'DEPRECATED' : 'RECOMMENDED'
+    });
+  }
+  for (const clusters of Object.values(seedData.MOCK.mwClusters || {})) {
+    for (const cluster of clusters) {
+      const componentId = `comp-mw-${toStableId('p', cluster.product).replace(/^p-/, '')}`;
+      components.set(componentId, {
+        id: componentId,
+        componentType: ['Redis'].includes(cluster.product) ? 'CACHE' : cluster.product.includes('MQ') ? 'MQ' : 'OTHER',
+        productName: cluster.product,
+        lifecycle: cluster.health === 'healthy' ? 'RECOMMENDED' : 'ALLOWED'
+      });
+    }
+  }
+  for (const component of components.values()) {
+    await client.query('INSERT INTO tech_components (id, payload) VALUES ($1, $2::jsonb)', [component.id, JSON.stringify(component)]);
+  }
+
+  const subsystemToSystem = {};
+  for (const [systemId, subsystems] of Object.entries(seedData.MOCK.subsystems || {})) {
+    for (const subsystem of subsystems) subsystemToSystem[subsystem.id] = systemId;
+  }
+  const systemById = {};
+  for (const systems of Object.values(seedData.MOCK.systems || {})) {
+    for (const system of systems) systemById[system.id] = system;
+  }
+  const allApps = [];
+  for (const [subsystemId, apps] of Object.entries(seedData.MOCK.apps || {})) {
+    for (const app of apps) allApps.push({ ...app, subsystemId, systemId: subsystemToSystem[subsystemId] });
+  }
+
+  for (let idx = 0; idx < allApps.length; idx += 1) {
+    const app = allApps[idx];
+    const artifactType = app.type === 'SPA' ? 'NPM_PACKAGE' : app.type === 'BATCH' ? 'JAR' : 'DOCKER_IMAGE';
+    const artifactPayload = {
+      artifactId: `art-${app.id}`,
+      appId: app.id,
+      artifactType,
+      version: `2026.02.${String((idx % 28) + 1).padStart(2, '0')}`,
+      registryUrl: `harbor.bank.com/${app.id}`,
+      buildPipelineId: `pipe-${app.id}`
+    };
+    await client.query('INSERT INTO artifacts (id, app_id, payload) VALUES ($1, $2, $3::jsonb)', [
+      artifactPayload.artifactId,
+      app.id,
+      JSON.stringify(artifactPayload)
+    ]);
+
+    const servicePayload = {
+      serviceName: app.id,
+      appId: app.id,
+      serviceNamespace: app.systemId || 'unknown',
+      serviceVersion: artifactPayload.version,
+      discoveredAt: '2026-02-10'
+    };
+    await client.query('INSERT INTO otel_services (id, app_id, payload) VALUES ($1, $2, $3::jsonb)', [app.id, app.id, JSON.stringify(servicePayload)]);
+    for (let i = 0; i < 2; i += 1) {
+      const instancePayload = {
+        instanceId: `${app.id}-inst-${i + 1}`,
+        serviceName: app.id,
+        hostName: `node-${(idx % 8) + 1}`,
+        k8sPodName: `${app.id}-${String(i + 1).padStart(2, '0')}`,
+        status: app.status || 'RUNNING',
+        lastSeenAt: '2026-02-14T07:00:00Z'
+      };
+      await client.query('INSERT INTO otel_instances (id, service_id, payload) VALUES ($1, $2, $3::jsonb)', [
+        instancePayload.instanceId,
+        app.id,
+        JSON.stringify(instancePayload)
+      ]);
+    }
+
+    const systemTechStack = systemById[app.systemId]?.techStack || '';
+    const candidateComponents = Array.from(components.values()).filter((comp) => systemTechStack.includes(comp.productName));
+    const selected = candidateComponents.length ? candidateComponents.slice(0, 3) : Array.from(components.values()).slice(idx % 5, (idx % 5) + 2);
+    for (const component of selected) {
+      await client.query(
+        'INSERT INTO app_tech_rel (app_id, component_id, payload) VALUES ($1, $2, $3::jsonb)',
+        [app.id, component.id, JSON.stringify({ appId: app.id, componentId: component.id, usageType: 'RUNTIME_DEP' })]
+      );
+    }
+
+    const logicalEntity = logicalEntities[idx % logicalEntities.length];
+    const dataObjPayload = {
+      dataObjectId: `do-${app.id}`,
+      appId: app.id,
+      logicalEntityId: logicalEntity.id,
+      objectName: `${app.name}-主数据`,
+      storageType: app.type === 'BATCH' ? 'FILE' : 'TABLE',
+      criticality: ['A', 'B'].includes(app.classification) ? 'HIGH' : 'MEDIUM'
+    };
+    await client.query(
+      'INSERT INTO data_objects (id, app_id, logical_entity_id, payload) VALUES ($1, $2, $3, $4::jsonb)',
+      [dataObjPayload.dataObjectId, app.id, logicalEntity.id, JSON.stringify(dataObjPayload)]
+    );
+  }
+
+  const lbCluster = {
+    id: 'lb-cluster-prod',
+    clusterName: '生产LB集群',
+    clusterType: 'LOCAL',
+    dc: '新数据中心'
+  };
+  await client.query('INSERT INTO lb_clusters (id, payload) VALUES ($1, $2::jsonb)', [lbCluster.id, JSON.stringify(lbCluster)]);
+  await client.query('INSERT INTO lb_devices (id, cluster_id, payload) VALUES ($1, $2, $3::jsonb)', [
+    'lb-device-f5-prod-01',
+    lbCluster.id,
+    JSON.stringify({
+      deviceId: 'lb-device-f5-prod-01',
+      deviceName: 'F5-PROD-01',
+      deviceType: 'HARDWARE',
+      productName: 'F5 BIG-IP'
+    })
+  ]);
+
   const chainDomains = ['card-api.bank.com', 'loan-api.bank.com', 'openapi.bank.com'];
-  for (const domainName of chainDomains) {
+  for (let i = 0; i < chainDomains.length; i += 1) {
+    const domainName = chainDomains[i];
+    const poolId = `lb-pool-${i + 1}`;
+    const baseChain = buildTrafficChain(domainName);
+    await client.query('INSERT INTO lb_service_pools (id, payload) VALUES ($1, $2::jsonb)', [
+      poolId,
+      JSON.stringify({
+        poolId,
+        poolName: baseChain.pool,
+        vip: baseChain.vip,
+        lbAlgorithm: 'ROUND_ROBIN',
+        healthCheckType: 'HTTP',
+        healthCheckPath: '/health'
+      })
+    ]);
+    for (let j = 0; j < baseChain.backends.length; j += 1) {
+      const backend = baseChain.backends[j];
+      await client.query('INSERT INTO lb_pool_members (id, pool_id, payload) VALUES ($1, $2, $3::jsonb)', [
+        `${poolId}-member-${j + 1}`,
+        poolId,
+        JSON.stringify({
+          endpoint: backend.endpoint,
+          app: backend.app,
+          status: backend.status,
+          weight: 100
+        })
+      ]);
+    }
+    await client.query('INSERT INTO lb_domains (id, pool_id, payload) VALUES ($1, $2, $3::jsonb)', [
+      `lb-domain-${i + 1}`,
+      poolId,
+      JSON.stringify({
+        domainId: `lb-domain-${i + 1}`,
+        domainName,
+        domainType: 'INTERNAL',
+        vip: baseChain.vip,
+        sslCertExpire: baseChain.ssl.expireDate,
+        lbDevice: baseChain.lbDevice
+      })
+    ]);
     await client.query(
       'INSERT INTO traffic_chains (domain_name, payload) VALUES ($1, $2::jsonb)',
       [domainName, JSON.stringify(buildTrafficChain(domainName))]
@@ -1054,6 +1413,39 @@ async function handleApi(req, res, url) {
     return true;
   }
 
+  const appArtifactsMatch = url.pathname.match(/^\/api\/v1\/panorama\/applications\/([^/]+)\/artifacts$/);
+  if (req.method === 'GET' && appArtifactsMatch) {
+    const appId = decodeURIComponent(appArtifactsMatch[1]);
+    const { rows } = await pool.query('SELECT payload FROM artifacts WHERE app_id = $1 ORDER BY id', [appId]);
+    sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
+  const appTechMatch = url.pathname.match(/^\/api\/v1\/panorama\/applications\/([^/]+)\/tech-components$/);
+  if (req.method === 'GET' && appTechMatch) {
+    const appId = decodeURIComponent(appTechMatch[1]);
+    const { rows } = await pool.query(
+      `
+      SELECT tc.payload AS component_payload, rel.payload AS rel_payload
+      FROM app_tech_rel rel
+      JOIN tech_components tc ON tc.id = rel.component_id
+      WHERE rel.app_id = $1
+      ORDER BY rel.id
+      `,
+      [appId]
+    );
+    sendJson(res, 200, rows.map((row) => ({ ...row.component_payload, relation: row.rel_payload })));
+    return true;
+  }
+
+  const appDataObjMatch = url.pathname.match(/^\/api\/v1\/panorama\/applications\/([^/]+)\/data-objects$/);
+  if (req.method === 'GET' && appDataObjMatch) {
+    const appId = decodeURIComponent(appDataObjMatch[1]);
+    const { rows } = await pool.query('SELECT payload FROM data_objects WHERE app_id = $1 ORDER BY id', [appId]);
+    sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/v1/panorama/data-centers/summary') {
     const { rows } = await pool.query('SELECT payload FROM data_centers ORDER BY payload->>\'name\'');
     sendJson(res, 200, rows.map((row) => row.payload));
@@ -1173,12 +1565,134 @@ async function handleApi(req, res, url) {
 
   if (req.method === 'GET' && url.pathname === '/api/v1/panorama/traffic-chain') {
     const domain = url.searchParams.get('domain') || 'card-api.bank.com';
+    const domainRes = await pool.query('SELECT pool_id, payload FROM lb_domains WHERE payload->>\'domainName\' = $1 LIMIT 1', [domain]);
+    if (domainRes.rows.length) {
+      const poolId = domainRes.rows[0].pool_id;
+      const domainPayload = domainRes.rows[0].payload;
+      const [poolRes, membersRes] = await Promise.all([
+        pool.query('SELECT payload FROM lb_service_pools WHERE id = $1', [poolId]),
+        pool.query('SELECT payload FROM lb_pool_members WHERE pool_id = $1 ORDER BY id', [poolId])
+      ]);
+      if (poolRes.rows.length) {
+        const poolPayload = poolRes.rows[0].payload;
+        sendJson(res, 200, {
+          domain,
+          vip: domainPayload.vip,
+          lbDevice: domainPayload.lbDevice || 'F5-PROD-01',
+          pool: poolPayload.poolName,
+          backends: membersRes.rows.map((row) => row.payload),
+          ssl: {
+            valid: true,
+            expireDate: domainPayload.sslCertExpire || '2027-03-15'
+          }
+        });
+        return true;
+      }
+    }
+
     const chainRes = await pool.query('SELECT payload FROM traffic_chains WHERE domain_name = $1', [domain]);
     if (chainRes.rows.length) {
       sendJson(res, 200, chainRes.rows[0].payload);
       return true;
     }
     sendJson(res, 200, buildTrafficChain(domain));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/lb-domains') {
+    const { rows } = await pool.query('SELECT payload FROM lb_domains ORDER BY payload->>\'domainName\'');
+    sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/otel-services') {
+    const appId = url.searchParams.get('app_id');
+    const params = [];
+    let sql = 'SELECT payload FROM otel_services';
+    if (appId) {
+      params.push(appId);
+      sql += ` WHERE app_id = $${params.length}`;
+    }
+    sql += ' ORDER BY id';
+    const { rows } = await pool.query(sql, params);
+    sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
+  const otelSvcInstancesMatch = url.pathname.match(/^\/api\/v1\/panorama\/otel-services\/([^/]+)\/instances$/);
+  if (req.method === 'GET' && otelSvcInstancesMatch) {
+    const serviceId = decodeURIComponent(otelSvcInstancesMatch[1]);
+    const { rows } = await pool.query('SELECT payload FROM otel_instances WHERE service_id = $1 ORDER BY id', [serviceId]);
+    sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/capabilities') {
+    const domainId = url.searchParams.get('domain_id');
+    const params = [];
+    let sql = 'SELECT payload FROM capabilities';
+    if (domainId) {
+      params.push(domainId);
+      sql += ` WHERE domain_id = $${params.length}`;
+    }
+    sql += ' ORDER BY id';
+    const { rows } = await pool.query(sql, params);
+    sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/processes') {
+    const capabilityId = url.searchParams.get('capability_id');
+    const params = [];
+    let sql = 'SELECT payload FROM processes';
+    if (capabilityId) {
+      params.push(capabilityId);
+      sql += ` WHERE capability_id = $${params.length}`;
+    }
+    sql += ' ORDER BY id';
+    const { rows } = await pool.query(sql, params);
+    sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/data/subject-areas') {
+    const { rows } = await pool.query('SELECT payload FROM subject_areas ORDER BY id');
+    sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/data/logical-entities') {
+    const subjectAreaId = url.searchParams.get('subject_area_id');
+    const params = [];
+    let sql = 'SELECT payload FROM logical_entities';
+    if (subjectAreaId) {
+      params.push(subjectAreaId);
+      sql += ` WHERE subject_area_id = $${params.length}`;
+    }
+    sql += ' ORDER BY id';
+    const { rows } = await pool.query(sql, params);
+    sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/data/data-objects') {
+    const appId = url.searchParams.get('app_id');
+    const logicalEntityId = url.searchParams.get('logical_entity_id');
+    const params = [];
+    let sql = 'SELECT payload FROM data_objects';
+    const conditions = [];
+    if (appId) {
+      params.push(appId);
+      conditions.push(`app_id = $${params.length}`);
+    }
+    if (logicalEntityId) {
+      params.push(logicalEntityId);
+      conditions.push(`logical_entity_id = $${params.length}`);
+    }
+    if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
+    sql += ' ORDER BY id';
+    const { rows } = await pool.query(sql, params);
+    sendJson(res, 200, rows.map((row) => row.payload));
     return true;
   }
 
