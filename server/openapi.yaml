@@ -836,6 +836,9 @@ paths:
         - in: header
           name: X-User
           schema: { type: string, description: Optional operator id/name used as actor }
+        - in: header
+          name: X-Role
+          schema: { type: string, description: Optional operator role (APPLICANT/REVIEWER/ARCHITECT/ADMIN) }
       requestBody:
         required: true
         content:
@@ -877,6 +880,9 @@ paths:
         - in: header
           name: X-User
           schema: { type: string }
+        - in: header
+          name: X-Role
+          schema: { type: string }
       responses:
         '200': { description: Submit result }
 
@@ -890,6 +896,9 @@ paths:
           schema: { type: string }
         - in: header
           name: X-User
+          schema: { type: string }
+        - in: header
+          name: X-Role
           schema: { type: string }
       responses:
         '200': { description: Resubmit result }
@@ -915,6 +924,9 @@ paths:
           schema: { type: string }
         - in: header
           name: X-User
+          schema: { type: string }
+        - in: header
+          name: X-Role
           schema: { type: string }
       responses:
         '200': { description: Compliance re-run result }
@@ -944,6 +956,9 @@ paths:
         - in: header
           name: X-User
           schema: { type: string }
+        - in: header
+          name: X-Role
+          schema: { type: string }
       responses:
         '200': { description: Approve result }
 
@@ -957,6 +972,9 @@ paths:
           schema: { type: string }
         - in: header
           name: X-User
+          schema: { type: string }
+        - in: header
+          name: X-Role
           schema: { type: string }
       responses:
         '200': { description: Reject result }

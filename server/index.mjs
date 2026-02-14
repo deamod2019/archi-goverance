@@ -1680,6 +1680,14 @@ function normalizeActor(rawActor) {
   return actor.slice(0, 64);
 }
 
+function normalizeRole(rawRole) {
+  const role = String(rawRole || '').trim().toUpperCase();
+  if (!role) return 'ARCHITECT';
+  const allowed = new Set(['APPLICANT', 'REVIEWER', 'ARCHITECT', 'ADMIN', 'SYSTEM']);
+  if (!allowed.has(role)) return 'ARCHITECT';
+  return role;
+}
+
 function resolveActor(req, url, body = null) {
   return normalizeActor(
     body?.actor
@@ -1689,10 +1697,54 @@ function resolveActor(req, url, body = null) {
   );
 }
 
+function resolveRole(req, url, body = null) {
+  return normalizeRole(
+    body?.role
+    || url.searchParams.get('role')
+    || headerValue(req, 'x-role')
+  );
+}
+
+function resolveActorContext(req, url, body = null) {
+  return {
+    actor: resolveActor(req, url, body),
+    role: resolveRole(req, url, body)
+  };
+}
+
 function assertReviewStatusAllowed(currentStatus, allowedStatuses, actionName) {
   if (!Array.isArray(allowedStatuses) || !allowedStatuses.length) return;
   if (!allowedStatuses.includes(currentStatus)) {
     throw new HttpError(409, `review status '${currentStatus}' cannot ${actionName}`);
+  }
+}
+
+function isReviewApplicant(review, actor) {
+  const applicant = String(review?.applicant || '').trim();
+  if (!applicant) return false;
+  return applicant === String(actor || '').trim();
+}
+
+function assertReviewPermission(action, review, context) {
+  const role = normalizeRole(context?.role);
+  const actor = normalizeActor(context?.actor);
+  const elevated = role === 'ARCHITECT' || role === 'ADMIN';
+  const reviewer = role === 'REVIEWER';
+  const applicant = isReviewApplicant(review, actor);
+
+  if (action === 'SUBMITTED' || action === 'RESUBMITTED') {
+    if (applicant || elevated) return;
+    throw new HttpError(403, `actor '${actor}' (role=${role}) cannot ${action.toLowerCase()} review '${review.id}'`);
+  }
+
+  if (action === 'CHECKS_RERUN') {
+    if (applicant || elevated || reviewer) return;
+    throw new HttpError(403, `actor '${actor}' (role=${role}) cannot rerun checks for review '${review.id}'`);
+  }
+
+  if (action === 'APPROVED' || action === 'REJECTED') {
+    if (elevated || reviewer) return;
+    throw new HttpError(403, `actor '${actor}' (role=${role}) cannot ${action === 'APPROVED' ? 'approve' : 'reject'} review '${review.id}'`);
   }
 }
 
@@ -1923,10 +1975,19 @@ async function appendReviewEvent(queryable, reviewId, action, payload = {}, acto
 }
 
 async function runReviewCompliance(reviewId, options = {}) {
-  const { updateStatus = true, allowedStatuses = null, action = null, actor = 'system' } = options;
+  const {
+    updateStatus = true,
+    allowedStatuses = null,
+    action = null,
+    actor = 'system',
+    role = 'SYSTEM'
+  } = options;
   const review = await loadReviewRowOrThrow(reviewId);
 
   assertReviewStatusAllowed(review.status, allowedStatuses, 'run this action');
+  if (action) {
+    assertReviewPermission(action, review, { actor, role });
+  }
 
   const checks = await evaluateCompliance(review);
   const hasCriticalFail = checks.some((c) => !c.passed && c.severity === 'CRITICAL');
@@ -1945,7 +2006,8 @@ async function runReviewCompliance(reviewId, options = {}) {
         previousStatus: review.status,
         status: nextStatus,
         blocked: hasCriticalFail,
-        summary
+        summary,
+        actorRole: normalizeRole(role)
       }, actor);
     }
   });
@@ -3318,7 +3380,7 @@ async function handleApi(req, res, url) {
     const date = body.date || new Date().toISOString().slice(0, 10);
     const status = body.status || 'DRAFT';
     const payload = { ...body };
-    const actor = resolveActor(req, url, body);
+    const actorCtx = resolveActorContext(req, url, body);
     await withTransaction(async (client) => {
       await client.query(
         `
@@ -3327,7 +3389,11 @@ async function handleApi(req, res, url) {
         `,
         [id, body.title, body.type, body.system || null, body.level || null, body.applicant || null, date, status, JSON.stringify(payload)]
       );
-      await appendReviewEvent(client, id, 'CREATED', { status, title: body.title }, actor);
+      await appendReviewEvent(client, id, 'CREATED', {
+        status,
+        title: body.title,
+        actorRole: actorCtx.role
+      }, actorCtx.actor);
     });
 
     sendJson(res, 201, { id, title: body.title, type: body.type, system: body.system || null, level: body.level || null, applicant: body.applicant || null, date, status });
@@ -3358,12 +3424,13 @@ async function handleApi(req, res, url) {
   const reviewSubmitMatch = url.pathname.match(/^\/api\/v1\/reviews\/([^/]+)\/submit$/);
   if (req.method === 'PUT' && reviewSubmitMatch) {
     const reviewId = decodeURIComponent(reviewSubmitMatch[1]);
-    const actor = resolveActor(req, url);
+    const actorCtx = resolveActorContext(req, url);
     const result = await runReviewCompliance(reviewId, {
       updateStatus: true,
       allowedStatuses: ['DRAFT'],
       action: 'SUBMITTED',
-      actor
+      actor: actorCtx.actor,
+      role: actorCtx.role
     });
     sendJson(res, 200, result);
     return true;
@@ -3372,12 +3439,13 @@ async function handleApi(req, res, url) {
   const reviewResubmitMatch = url.pathname.match(/^\/api\/v1\/reviews\/([^/]+)\/resubmit$/);
   if (req.method === 'PUT' && reviewResubmitMatch) {
     const reviewId = decodeURIComponent(reviewResubmitMatch[1]);
-    const actor = resolveActor(req, url);
+    const actorCtx = resolveActorContext(req, url);
     const result = await runReviewCompliance(reviewId, {
       updateStatus: true,
       allowedStatuses: ['DRAFT', 'REJECTED'],
       action: 'RESUBMITTED',
-      actor
+      actor: actorCtx.actor,
+      role: actorCtx.role
     });
     sendJson(res, 200, result);
     return true;
@@ -3397,12 +3465,13 @@ async function handleApi(req, res, url) {
   const reviewChecksRunMatch = url.pathname.match(/^\/api\/v1\/reviews\/([^/]+)\/compliance-check\/run$/);
   if (req.method === 'POST' && reviewChecksRunMatch) {
     const reviewId = decodeURIComponent(reviewChecksRunMatch[1]);
-    const actor = resolveActor(req, url);
+    const actorCtx = resolveActorContext(req, url);
     const result = await runReviewCompliance(reviewId, {
       updateStatus: false,
       allowedStatuses: ['DRAFT', 'REVIEWING', 'REJECTED'],
       action: 'CHECKS_RERUN',
-      actor
+      actor: actorCtx.actor,
+      role: actorCtx.role
     });
     sendJson(res, 200, { ...result, rerun: true });
     return true;
@@ -3432,16 +3501,21 @@ async function handleApi(req, res, url) {
   const reviewApproveMatch = url.pathname.match(/^\/api\/v1\/reviews\/([^/]+)\/approve$/);
   if (req.method === 'PUT' && reviewApproveMatch) {
     const reviewId = decodeURIComponent(reviewApproveMatch[1]);
-    const actor = resolveActor(req, url);
+    const actorCtx = resolveActorContext(req, url);
     await withTransaction(async (client) => {
       const review = await loadReviewRowOrThrow(reviewId, client);
       assertReviewStatusAllowed(review.status, ['REVIEWING'], 'be approved');
+      assertReviewPermission('APPROVED', review, actorCtx);
       const result = await client.query(
         'UPDATE reviews SET status = $2, updated_at = now() WHERE id = $1 RETURNING id',
         [reviewId, 'APPROVED']
       );
       if (!result.rows.length) throw new HttpError(404, 'review not found');
-      await appendReviewEvent(client, reviewId, 'APPROVED', { previousStatus: review.status, status: 'APPROVED' }, actor);
+      await appendReviewEvent(client, reviewId, 'APPROVED', {
+        previousStatus: review.status,
+        status: 'APPROVED',
+        actorRole: actorCtx.role
+      }, actorCtx.actor);
     });
     sendJson(res, 200, { id: reviewId, status: 'APPROVED' });
     return true;
@@ -3450,16 +3524,21 @@ async function handleApi(req, res, url) {
   const reviewRejectMatch = url.pathname.match(/^\/api\/v1\/reviews\/([^/]+)\/reject$/);
   if (req.method === 'PUT' && reviewRejectMatch) {
     const reviewId = decodeURIComponent(reviewRejectMatch[1]);
-    const actor = resolveActor(req, url);
+    const actorCtx = resolveActorContext(req, url);
     await withTransaction(async (client) => {
       const review = await loadReviewRowOrThrow(reviewId, client);
       assertReviewStatusAllowed(review.status, ['REVIEWING'], 'be rejected');
+      assertReviewPermission('REJECTED', review, actorCtx);
       const result = await client.query(
         'UPDATE reviews SET status = $2, updated_at = now() WHERE id = $1 RETURNING id',
         [reviewId, 'REJECTED']
       );
       if (!result.rows.length) throw new HttpError(404, 'review not found');
-      await appendReviewEvent(client, reviewId, 'REJECTED', { previousStatus: review.status, status: 'REJECTED' }, actor);
+      await appendReviewEvent(client, reviewId, 'REJECTED', {
+        previousStatus: review.status,
+        status: 'REJECTED',
+        actorRole: actorCtx.role
+      }, actorCtx.actor);
     });
     sendJson(res, 200, { id: reviewId, status: 'REJECTED' });
     return true;

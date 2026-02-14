@@ -189,11 +189,13 @@ function closePopup() {
 
 async function apiRequest(url, options = {}) {
   const actingUser = String(window.MOCK?.currentUser || '张').trim() || '张';
+  const actingRole = String(window.MOCK?.currentRole || 'ARCHITECT').trim().toUpperCase() || 'ARCHITECT';
   const encodedActor = encodeURIComponent(actingUser);
   const requestHeaders = {
     'Content-Type': 'application/json',
     Accept: 'application/json',
     'X-User': encodedActor,
+    'X-Role': actingRole,
     ...(options.headers || {})
   };
   const response = await fetch(url, {
