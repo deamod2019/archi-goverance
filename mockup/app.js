@@ -251,6 +251,9 @@ const PANORAMA_ENTITY_META = {
   dataCenter: { label: '数据中心', path: '/api/v1/panorama/data-centers' },
   lbDomain: { label: 'LB域名', path: '/api/v1/panorama/lb-domains' },
   otelService: { label: 'OTel服务', path: '/api/v1/panorama/otel-services' },
+  otelInstance: { label: 'OTel实例', path: '/api/v1/panorama/otel-instances' },
+  techComponent: { label: '技术组件', path: '/api/v1/tech-components' },
+  appTechRelation: { label: '应用技术关系', path: '/api/v1/panorama/app-tech-relations' },
   artifact: { label: '制品', path: '/api/v1/panorama/artifacts' },
   dataObject: { label: '数据对象', path: '/api/v1/panorama/data-objects' },
   apiGroup: { label: 'API分组', path: '/api/v1/panorama/api-groups' },
@@ -271,6 +274,9 @@ function getPanoramaAdminData() {
     dataCenters: [],
     lbDomains: [],
     otelServices: [],
+    otelInstances: [],
+    techComponents: [],
+    appTechRelations: [],
     artifacts: [],
     dataObjects: [],
     apiGroups: [],
@@ -290,11 +296,14 @@ function fetchPanoramaAdminData() {
     apiRequest('/api/v1/panorama/data-centers'),
     apiRequest('/api/v1/panorama/lb-domains'),
     apiRequest('/api/v1/panorama/otel-services'),
+    apiRequest('/api/v1/panorama/otel-instances'),
+    apiRequest('/api/v1/tech-components'),
+    apiRequest('/api/v1/panorama/app-tech-relations'),
     apiRequest('/api/v1/panorama/artifacts'),
     apiRequest('/api/v1/panorama/data-objects'),
     apiRequest('/api/v1/panorama/api-groups'),
     apiRequest('/api/v1/panorama/api-endpoints')
-  ]).then(([domains, systems, subsystems, applications, dependencies, dbClusters, mwClusters, dataCenters, lbDomains, otelServices, artifacts, dataObjects, apiGroups, apiEndpoints]) => ({
+  ]).then(([domains, systems, subsystems, applications, dependencies, dbClusters, mwClusters, dataCenters, lbDomains, otelServices, otelInstances, techComponents, appTechRelations, artifacts, dataObjects, apiGroups, apiEndpoints]) => ({
     domains: domains || [],
     systems: systems || [],
     subsystems: subsystems || [],
@@ -305,6 +314,9 @@ function fetchPanoramaAdminData() {
     dataCenters: dataCenters || [],
     lbDomains: lbDomains || [],
     otelServices: otelServices || [],
+    otelInstances: otelInstances || [],
+    techComponents: techComponents || [],
+    appTechRelations: appTechRelations || [],
     artifacts: artifacts || [],
     dataObjects: dataObjects || [],
     apiGroups: apiGroups || [],
@@ -472,6 +484,40 @@ function defaultPanoramaEntityTemplate(entityType) {
       discoveredAt: today
     };
   }
+  if (entityType === 'otelInstance') {
+    return {
+      id: `inst-${Date.now()}`,
+      serviceId: data.otelServices[0]?.id || '',
+      serviceName: data.otelServices[0]?.serviceName || '',
+      hostName: 'node-1',
+      k8sPodName: `pod-${Date.now()}`,
+      status: 'RUNNING',
+      lastSeenAt: `${today}T00:00:00Z`
+    };
+  }
+  if (entityType === 'techComponent') {
+    return {
+      id: `comp-${Date.now()}`,
+      productName: 'NewTech',
+      category: 'MIDDLEWARE',
+      lifecycle: 'ALLOWED',
+      version: '1.0.0',
+      vendor: 'Internal',
+      status: 'ACTIVE',
+      owners: [],
+      tags: []
+    };
+  }
+  if (entityType === 'appTechRelation') {
+    return {
+      appId: data.applications[0]?.id || '',
+      componentId: data.techComponents[0]?.id || '',
+      usageType: 'RUNTIME_DEP',
+      owner: '',
+      notes: '',
+      status: 'ACTIVE'
+    };
+  }
   if (entityType === 'artifact') {
     return {
       id: `art-${Date.now()}`,
@@ -523,6 +569,9 @@ function findPanoramaEntity(entityType, id) {
   if (entityType === 'dataCenter') return data.dataCenters.find((x) => x.id === id);
   if (entityType === 'lbDomain') return data.lbDomains.find((x) => x.id === id);
   if (entityType === 'otelService') return data.otelServices.find((x) => x.id === id);
+  if (entityType === 'otelInstance') return data.otelInstances.find((x) => String(x.id) === String(id));
+  if (entityType === 'techComponent') return data.techComponents.find((x) => x.id === id);
+  if (entityType === 'appTechRelation') return data.appTechRelations.find((x) => String(x.id) === String(id));
   if (entityType === 'artifact') return data.artifacts.find((x) => x.id === id);
   if (entityType === 'dataObject') return data.dataObjects.find((x) => x.id === id);
   if (entityType === 'apiGroup') return data.apiGroups.find((x) => x.id === id);
@@ -723,6 +772,50 @@ function renderPanoramaAdminRows(entityType, data) {
       </td>
     </tr>`).join('');
   }
+  if (entityType === 'otelInstance') {
+    return (data.otelInstances || []).map((inst) => `<tr>
+      <td><strong>${inst.id}</strong></td>
+      <td>${inst.serviceName || inst.serviceId || '-'}</td>
+      <td>${inst.appName || inst.appId || '-'}</td>
+      <td>${inst.hostName || '-'}</td>
+      <td>${inst.k8sPodName || '-'}</td>
+      <td>${inst.status || '-'}</td>
+      <td>${inst.lastSeenAt || '-'}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-outline" style="padding:4px 8px" onclick="editPanoramaEntityPrompt('otelInstance','${inst.id}')">编辑</button>
+        <button class="btn btn-outline" style="padding:4px 8px;color:var(--red)" onclick="deletePanoramaEntity('otelInstance','${inst.id}')">删除</button>
+      </td>
+    </tr>`).join('');
+  }
+  if (entityType === 'techComponent') {
+    return (data.techComponents || []).map((comp) => `<tr>
+      <td><strong>${comp.id}</strong></td>
+      <td>${comp.productName || '-'}</td>
+      <td>${comp.category || comp.componentType || '-'}</td>
+      <td>${comp.lifecycle || '-'}</td>
+      <td>${comp.version || '-'}</td>
+      <td>${comp.vendor || '-'}</td>
+      <td>${comp.status || '-'}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-outline" style="padding:4px 8px" onclick="editPanoramaEntityPrompt('techComponent','${comp.id}')">编辑</button>
+        <button class="btn btn-outline" style="padding:4px 8px;color:var(--red)" onclick="deletePanoramaEntity('techComponent','${comp.id}')">删除</button>
+      </td>
+    </tr>`).join('');
+  }
+  if (entityType === 'appTechRelation') {
+    return (data.appTechRelations || []).map((rel) => `<tr>
+      <td><strong>${rel.id}</strong></td>
+      <td>${rel.appName || rel.appId || '-'}</td>
+      <td>${rel.componentName || rel.componentId || '-'}</td>
+      <td>${rel.usageType || '-'}</td>
+      <td>${rel.status || '-'}</td>
+      <td>${rel.owner || '-'}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-outline" style="padding:4px 8px" onclick="editPanoramaEntityPrompt('appTechRelation','${rel.id}')">编辑</button>
+        <button class="btn btn-outline" style="padding:4px 8px;color:var(--red)" onclick="deletePanoramaEntity('appTechRelation','${rel.id}')">删除</button>
+      </td>
+    </tr>`).join('');
+  }
   if (entityType === 'artifact') {
     return (data.artifacts || []).map((a) => `<tr>
       <td><strong>${a.id}</strong></td>
@@ -812,6 +905,9 @@ function renderPanoramaAdmin(c, b) {
     dataCenters: [],
     lbDomains: [],
     otelServices: [],
+    otelInstances: [],
+    techComponents: [],
+    appTechRelations: [],
     artifacts: [],
     dataObjects: [],
     apiGroups: [],
@@ -828,6 +924,9 @@ function renderPanoramaAdmin(c, b) {
     { key: 'dataCenter', label: `数据中心 (${data.dataCenters.length})` },
     { key: 'lbDomain', label: `LB域名 (${data.lbDomains.length})` },
     { key: 'otelService', label: `OTel服务 (${data.otelServices.length})` },
+    { key: 'otelInstance', label: `OTel实例 (${data.otelInstances.length})` },
+    { key: 'techComponent', label: `技术组件 (${data.techComponents.length})` },
+    { key: 'appTechRelation', label: `应用技术关系 (${data.appTechRelations.length})` },
     { key: 'artifact', label: `制品 (${data.artifacts.length})` },
     { key: 'dataObject', label: `数据对象 (${data.dataObjects.length})` },
     { key: 'apiGroup', label: `API分组 (${data.apiGroups.length})` },
@@ -853,9 +952,15 @@ function renderPanoramaAdmin(c, b) {
                     ? '<tr><th>ID</th><th>域名</th><th>VIP</th><th>Pool</th><th>LB设备</th><th>证书到期</th><th>操作</th></tr>'
                     : panoramaAdminEntity === 'otelService'
                       ? '<tr><th>ID</th><th>服务名</th><th>应用ID</th><th>命名空间</th><th>版本</th><th>发现日期</th><th>操作</th></tr>'
-                      : panoramaAdminEntity === 'artifact'
-                        ? '<tr><th>ID</th><th>应用</th><th>类型</th><th>版本</th><th>仓库地址</th><th>流水线</th><th>操作</th></tr>'
-                        : panoramaAdminEntity === 'dataObject'
+                      : panoramaAdminEntity === 'otelInstance'
+                        ? '<tr><th>ID</th><th>服务</th><th>应用</th><th>主机</th><th>Pod</th><th>状态</th><th>最后发现</th><th>操作</th></tr>'
+                        : panoramaAdminEntity === 'techComponent'
+                          ? '<tr><th>ID</th><th>组件名</th><th>类别</th><th>生命周期</th><th>版本</th><th>供应商</th><th>状态</th><th>操作</th></tr>'
+                          : panoramaAdminEntity === 'appTechRelation'
+                            ? '<tr><th>ID</th><th>应用</th><th>技术组件</th><th>用途</th><th>状态</th><th>负责人</th><th>操作</th></tr>'
+                        : panoramaAdminEntity === 'artifact'
+                          ? '<tr><th>ID</th><th>应用</th><th>类型</th><th>版本</th><th>仓库地址</th><th>流水线</th><th>操作</th></tr>'
+                          : panoramaAdminEntity === 'dataObject'
                           ? '<tr><th>ID</th><th>对象名</th><th>应用</th><th>逻辑实体</th><th>存储类型</th><th>关键级别</th><th>操作</th></tr>'
                           : panoramaAdminEntity === 'apiGroup'
                             ? '<tr><th>ID</th><th>分组名</th><th>应用</th><th>协议</th><th>操作</th></tr>'

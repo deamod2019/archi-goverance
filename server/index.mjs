@@ -2062,6 +2062,65 @@ function normalizeApiEndpointInput(raw, fallbackId) {
   };
 }
 
+function normalizeOtelInstanceInput(raw, fallbackId) {
+  const id = String(raw?.id || raw?.instanceId || fallbackId || '').trim();
+  const serviceId = String(raw?.serviceId || '').trim();
+  const serviceName = String(raw?.serviceName || serviceId).trim();
+  const hostName = String(raw?.hostName || '').trim();
+  const k8sPodName = String(raw?.k8sPodName || '').trim();
+  const status = String(raw?.status || 'RUNNING').trim().toUpperCase();
+  const lastSeenAt = String(raw?.lastSeenAt || new Date().toISOString()).trim();
+  if (!id) throw new HttpError(400, 'otel instance id is required');
+  if (!serviceId) throw new HttpError(400, 'otel instance serviceId is required');
+  if (!hostName) throw new HttpError(400, 'otel instance hostName is required');
+  if (!['RUNNING', 'OFFLINE', 'DEGRADED', 'UNKNOWN'].includes(status)) {
+    throw new HttpError(400, 'otel instance status must be one of: RUNNING, OFFLINE, DEGRADED, UNKNOWN');
+  }
+  return {
+    id,
+    serviceId,
+    payload: {
+      instanceId: id,
+      serviceId,
+      serviceName,
+      hostName,
+      k8sPodName,
+      status,
+      lastSeenAt
+    }
+  };
+}
+
+function normalizeAppTechRelationInput(raw) {
+  const appId = String(raw?.appId || '').trim();
+  const componentId = String(raw?.componentId || '').trim();
+  const usageType = String(raw?.usageType || 'RUNTIME_DEP').trim().toUpperCase();
+  const owner = String(raw?.owner || '').trim();
+  const notes = String(raw?.notes || '').trim();
+  const status = String(raw?.status || 'ACTIVE').trim().toUpperCase();
+  if (!appId) throw new HttpError(400, 'app tech relation appId is required');
+  if (!componentId) throw new HttpError(400, 'app tech relation componentId is required');
+  if (!['RUNTIME_DEP', 'BUILD_DEP', 'DATA_ACCESS', 'OBSERVABILITY', 'SECURITY', 'OTHER'].includes(usageType)) {
+    throw new HttpError(400, 'app tech relation usageType must be one of: RUNTIME_DEP, BUILD_DEP, DATA_ACCESS, OBSERVABILITY, SECURITY, OTHER');
+  }
+  if (!['ACTIVE', 'INACTIVE'].includes(status)) {
+    throw new HttpError(400, 'app tech relation status must be one of: ACTIVE, INACTIVE');
+  }
+  return {
+    appId,
+    componentId,
+    payload: {
+      appId,
+      componentId,
+      usageType,
+      owner,
+      notes,
+      status,
+      updatedAt: new Date().toISOString()
+    }
+  };
+}
+
 async function resolveDependencyNodePayload(client, nodeId) {
   const existing = await client.query('SELECT payload FROM dependency_nodes WHERE id = $1', [nodeId]);
   if (existing.rows.length) {
@@ -4638,6 +4697,215 @@ async function handleApi(req, res, url) {
     const serviceId = decodeURIComponent(otelSvcInstancesMatch[1]);
     const { rows } = await pool.query('SELECT payload FROM otel_instances WHERE service_id = $1 ORDER BY id', [serviceId]);
     sendJson(res, 200, rows.map((row) => row.payload));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/otel-instances') {
+    const serviceId = url.searchParams.get('service_id');
+    const appId = url.searchParams.get('app_id');
+    const params = [];
+    const conditions = [];
+    let sql = `
+      SELECT
+        oi.id,
+        oi.service_id,
+        oi.payload,
+        os.app_id,
+        os.payload AS service_payload,
+        ap.payload AS app_payload
+      FROM otel_instances oi
+      JOIN otel_services os ON os.id = oi.service_id
+      JOIN applications ap ON ap.id = os.app_id
+    `;
+    if (serviceId) {
+      params.push(serviceId);
+      conditions.push(`oi.service_id = $${params.length}`);
+    }
+    if (appId) {
+      params.push(appId);
+      conditions.push(`os.app_id = $${params.length}`);
+    }
+    if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
+    sql += ' ORDER BY oi.id';
+    const { rows } = await pool.query(sql, params);
+    sendJson(
+      res,
+      200,
+      rows.map((row) => ({
+        ...row.payload,
+        id: row.id,
+        instanceId: row.id,
+        serviceId: row.service_id,
+        serviceName: row.service_payload?.serviceName || row.payload?.serviceName || null,
+        appId: row.app_id,
+        appName: row.app_payload?.name || null
+      }))
+    );
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/panorama/otel-instances') {
+    const body = await readJsonBody(req);
+    const instance = normalizeOtelInstanceInput(body);
+    const serviceRes = await pool.query('SELECT app_id, payload FROM otel_services WHERE id = $1', [instance.serviceId]);
+    if (!serviceRes.rows.length) throw new HttpError(400, `otel service '${instance.serviceId}' does not exist`);
+    instance.payload.serviceName = instance.payload.serviceName || serviceRes.rows[0].payload?.serviceName || instance.serviceId;
+    try {
+      await pool.query('INSERT INTO otel_instances (id, service_id, payload) VALUES ($1, $2, $3::jsonb)', [
+        instance.id,
+        instance.serviceId,
+        JSON.stringify(instance.payload)
+      ]);
+    } catch (error) {
+      if (String(error.code) === '23505') throw new HttpError(409, `otel instance '${instance.id}' already exists`);
+      throw error;
+    }
+    sendJson(res, 201, { id: instance.id, ...instance.payload });
+    return true;
+  }
+
+  const otelInstanceItemMatch = url.pathname.match(/^\/api\/v1\/panorama\/otel-instances\/([^/]+)$/);
+  if (req.method === 'PUT' && otelInstanceItemMatch) {
+    const instanceId = decodeURIComponent(otelInstanceItemMatch[1]);
+    const body = await readJsonBody(req);
+    const current = await pool.query('SELECT service_id, payload FROM otel_instances WHERE id = $1', [instanceId]);
+    if (!current.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'otel instance not found' });
+      return true;
+    }
+    const merged = {
+      ...current.rows[0].payload,
+      ...body,
+      id: instanceId,
+      instanceId,
+      serviceId: body?.serviceId != null ? body.serviceId : current.rows[0].service_id
+    };
+    const instance = normalizeOtelInstanceInput(merged, instanceId);
+    const serviceRes = await pool.query('SELECT app_id, payload FROM otel_services WHERE id = $1', [instance.serviceId]);
+    if (!serviceRes.rows.length) throw new HttpError(400, `otel service '${instance.serviceId}' does not exist`);
+    instance.payload.serviceName = instance.payload.serviceName || serviceRes.rows[0].payload?.serviceName || instance.serviceId;
+    await pool.query('UPDATE otel_instances SET service_id = $2, payload = $3::jsonb, updated_at = now() WHERE id = $1', [
+      instanceId,
+      instance.serviceId,
+      JSON.stringify(instance.payload)
+    ]);
+    sendJson(res, 200, { id: instanceId, ...instance.payload });
+    return true;
+  }
+
+  if (req.method === 'DELETE' && otelInstanceItemMatch) {
+    const instanceId = decodeURIComponent(otelInstanceItemMatch[1]);
+    const deleted = await pool.query('DELETE FROM otel_instances WHERE id = $1 RETURNING id', [instanceId]);
+    if (!deleted.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'otel instance not found' });
+      return true;
+    }
+    sendJson(res, 200, { id: instanceId, deleted: true });
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/app-tech-relations') {
+    const appId = url.searchParams.get('app_id');
+    const componentId = url.searchParams.get('component_id');
+    const params = [];
+    const conditions = [];
+    let sql = `
+      SELECT
+        rel.id,
+        rel.app_id,
+        rel.component_id,
+        rel.payload,
+        ap.payload AS app_payload,
+        tc.payload AS component_payload
+      FROM app_tech_rel rel
+      JOIN applications ap ON ap.id = rel.app_id
+      JOIN tech_components tc ON tc.id = rel.component_id
+    `;
+    if (appId) {
+      params.push(appId);
+      conditions.push(`rel.app_id = $${params.length}`);
+    }
+    if (componentId) {
+      params.push(componentId);
+      conditions.push(`rel.component_id = $${params.length}`);
+    }
+    if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
+    sql += ' ORDER BY rel.id';
+    const { rows } = await pool.query(sql, params);
+    sendJson(
+      res,
+      200,
+      rows.map((row) => ({
+        id: row.id,
+        appId: row.app_id,
+        appName: row.app_payload?.name || null,
+        componentId: row.component_id,
+        componentName: row.component_payload?.productName || null,
+        ...row.payload
+      }))
+    );
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/panorama/app-tech-relations') {
+    const body = await readJsonBody(req);
+    const relation = normalizeAppTechRelationInput(body);
+    const [appRes, componentRes, existing] = await Promise.all([
+      pool.query('SELECT id FROM applications WHERE id = $1', [relation.appId]),
+      pool.query('SELECT id FROM tech_components WHERE id = $1', [relation.componentId]),
+      pool.query('SELECT id FROM app_tech_rel WHERE app_id = $1 AND component_id = $2 ORDER BY id LIMIT 1', [relation.appId, relation.componentId])
+    ]);
+    if (!appRes.rows.length) throw new HttpError(400, `application '${relation.appId}' does not exist`);
+    if (!componentRes.rows.length) throw new HttpError(400, `tech component '${relation.componentId}' does not exist`);
+    if (existing.rows.length) throw new HttpError(409, `relation '${relation.appId} -> ${relation.componentId}' already exists`);
+    const created = await pool.query(
+      'INSERT INTO app_tech_rel (app_id, component_id, payload) VALUES ($1, $2, $3::jsonb) RETURNING id',
+      [relation.appId, relation.componentId, JSON.stringify(relation.payload)]
+    );
+    sendJson(res, 201, { id: created.rows[0].id, ...relation.payload });
+    return true;
+  }
+
+  const appTechRelationItemMatch = url.pathname.match(/^\/api\/v1\/panorama\/app-tech-relations\/(\d+)$/);
+  if (req.method === 'PUT' && appTechRelationItemMatch) {
+    const relationId = Number.parseInt(appTechRelationItemMatch[1], 10);
+    const body = await readJsonBody(req);
+    const current = await pool.query('SELECT app_id, component_id, payload FROM app_tech_rel WHERE id = $1', [relationId]);
+    if (!current.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'app tech relation not found' });
+      return true;
+    }
+    const merged = {
+      ...current.rows[0].payload,
+      ...body,
+      appId: body?.appId != null ? body.appId : current.rows[0].app_id,
+      componentId: body?.componentId != null ? body.componentId : current.rows[0].component_id
+    };
+    const relation = normalizeAppTechRelationInput(merged);
+    const [appRes, componentRes] = await Promise.all([
+      pool.query('SELECT id FROM applications WHERE id = $1', [relation.appId]),
+      pool.query('SELECT id FROM tech_components WHERE id = $1', [relation.componentId])
+    ]);
+    if (!appRes.rows.length) throw new HttpError(400, `application '${relation.appId}' does not exist`);
+    if (!componentRes.rows.length) throw new HttpError(400, `tech component '${relation.componentId}' does not exist`);
+    await pool.query('UPDATE app_tech_rel SET app_id = $2, component_id = $3, payload = $4::jsonb WHERE id = $1', [
+      relationId,
+      relation.appId,
+      relation.componentId,
+      JSON.stringify(relation.payload)
+    ]);
+    sendJson(res, 200, { id: relationId, ...relation.payload });
+    return true;
+  }
+
+  if (req.method === 'DELETE' && appTechRelationItemMatch) {
+    const relationId = Number.parseInt(appTechRelationItemMatch[1], 10);
+    const deleted = await pool.query('DELETE FROM app_tech_rel WHERE id = $1 RETURNING id', [relationId]);
+    if (!deleted.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'app tech relation not found' });
+      return true;
+    }
+    sendJson(res, 200, { id: relationId, deleted: true });
     return true;
   }
 

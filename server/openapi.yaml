@@ -770,6 +770,100 @@ paths:
       responses:
         '200': { description: OTel instance list }
 
+  /api/v1/panorama/otel-instances:
+    get:
+      summary: List panorama OTel instances
+      parameters:
+        - in: query
+          name: service_id
+          schema: { type: string }
+        - in: query
+          name: app_id
+          schema: { type: string }
+      responses:
+        '200': { description: OTel instance list }
+    post:
+      summary: Create panorama OTel instance
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created OTel instance }
+
+  /api/v1/panorama/otel-instances/{id}:
+    put:
+      summary: Update panorama OTel instance
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated OTel instance }
+    delete:
+      summary: Delete panorama OTel instance
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Delete result }
+
+  /api/v1/panorama/app-tech-relations:
+    get:
+      summary: List panorama app-tech relations
+      parameters:
+        - in: query
+          name: app_id
+          schema: { type: string }
+        - in: query
+          name: component_id
+          schema: { type: string }
+      responses:
+        '200': { description: App-tech relation list }
+    post:
+      summary: Create panorama app-tech relation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created app-tech relation }
+
+  /api/v1/panorama/app-tech-relations/{id}:
+    put:
+      summary: Update panorama app-tech relation
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated app-tech relation }
+    delete:
+      summary: Delete panorama app-tech relation
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200': { description: Delete result }
+
   /api/v1/panorama/artifacts:
     get:
       summary: List panorama artifacts
