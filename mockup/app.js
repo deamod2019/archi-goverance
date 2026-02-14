@@ -34,6 +34,17 @@ function lifecycleTagClass(lifecycle) {
   if (x === 'FORBIDDEN' || x === 'CRITICAL' || x === 'MISSING') return 'tag-core';
   return 'tag-general';
 }
+function getDomainColor(domainIdOrName) {
+  const key = String(domainIdOrName || '').trim();
+  const domains = Array.isArray(MOCK?.domains) ? MOCK.domains : [];
+  const hit = domains.find((d) => d.id === key || d.name === key);
+  if (hit?.color) return hit.color;
+  // Stable fallback color by key hash for unseen domains.
+  const palette = ['#6366f1', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) hash = ((hash << 5) - hash + key.charCodeAt(i)) | 0;
+  return palette[Math.abs(hash) % palette.length];
+}
 function getStandardsCatalog() {
   const state = VIEW_CACHE.standardsCatalog;
   if (state?.status === 'ready' && Array.isArray(state.data)) return state.data;
@@ -727,7 +738,7 @@ function drawDepGraph() {
   nodes.forEach(n => {
     const conns = links.filter(l => l.source === n.id || l.target === n.id).length;
     const r = 16 + conns * 2;
-    const color = DOMAIN_COLORS[n.domain] || '#6366f1';
+    const color = getDomainColor(n.domain);
     svgContent += `<g class="dep-node" style="cursor:pointer" onclick="showImpact('${n.id}')">
       <circle cx="${n.x}" cy="${n.y}" r="${r}" fill="${color}" opacity="0.8" stroke="${color}" stroke-width="2"/>
       <text x="${n.x}" y="${n.y + r + 14}" text-anchor="middle" fill="#e2e8f0" font-size="11" font-family="Inter">${n.name}</text>
