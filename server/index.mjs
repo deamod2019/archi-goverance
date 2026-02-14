@@ -1719,13 +1719,16 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === 'GET' && url.pathname === '/api/v1/panorama/dependency-graph') {
-    const mock = await loadSectionPayload('MOCK');
     const domainId = url.searchParams.get('domain_id');
     const focusApp = url.searchParams.get('app_id');
     const depth = Number.parseInt(url.searchParams.get('depth') || '0', 10);
 
-    let nodes = mock.depNodes || [];
-    let edges = mock.dependencies || [];
+    const [nodeRes, edgeRes] = await Promise.all([
+      pool.query('SELECT payload FROM dependency_nodes ORDER BY id'),
+      pool.query('SELECT payload FROM dependencies ORDER BY id')
+    ]);
+    let nodes = nodeRes.rows.map((row) => row.payload);
+    let edges = edgeRes.rows.map((row) => row.payload);
     if (domainId) {
       nodes = nodes.filter((n) => n.domain === domainId);
       const allowed = new Set(nodes.map((n) => n.id));
@@ -1749,8 +1752,8 @@ async function handleApi(req, res, url) {
     const appId = decodeURIComponent(appImpactMatch[1]);
     const depth = Number.parseInt(url.searchParams.get('depth') || '3', 10);
     const changeType = url.searchParams.get('change_type') || 'UNKNOWN';
-    const mock = await loadSectionPayload('MOCK');
-    const deps = mock.dependencies || [];
+    const depsRes = await pool.query('SELECT payload FROM dependencies ORDER BY id');
+    const deps = depsRes.rows.map((row) => row.payload);
     const upstream = bfsNeighbors(appId, deps, depth, 'upstream');
     const downstream = bfsNeighbors(appId, deps, depth, 'downstream');
     sendJson(res, 200, { appId, changeType, depth, upstream, downstream });
@@ -2468,6 +2471,59 @@ async function handleApi(req, res, url) {
       if (row.event_type === 'ZOMBIE_DEPENDENCY') drift.zombieDep.push(row.payload);
     }
     sendJson(res, 200, drift);
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/standards/rule-map') {
+    const ruleMap = (await loadSectionPayload('RULE_STD_MAP')) || {};
+    sendJson(res, 200, ruleMap);
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/standards') {
+    const category = url.searchParams.get('category');
+    const status = url.searchParams.get('status');
+    const projection = (url.searchParams.get('projection') || 'full').trim() || 'full';
+    const fields = parseCsv(url.searchParams.get('fields'));
+    let standards = (await loadSectionPayload('ARCH_STANDARDS')) || [];
+    if (category) {
+      standards = standards.filter((x) => String(x.category).toUpperCase() === String(category).toUpperCase());
+    }
+    if (status) {
+      standards = standards.filter((x) => String(x.status).toUpperCase() === String(status).toUpperCase());
+    }
+    let data = standards;
+    if (projection === 'summary') {
+      data = standards.map((x) =>
+        projectObject(x, [
+          'id',
+          'name',
+          'code',
+          'category',
+          'version',
+          'status',
+          'owner',
+          'icon',
+          'description'
+        ])
+      );
+    } else if (projection !== 'full') {
+      throw new HttpError(400, `unsupported projection '${projection}'`);
+    }
+    sendJson(res, 200, projectData(data, fields));
+    return true;
+  }
+
+  const stdDetailMatch = url.pathname.match(/^\/api\/v1\/standards\/([^/]+)$/);
+  if (req.method === 'GET' && stdDetailMatch) {
+    const standardId = decodeURIComponent(stdDetailMatch[1]);
+    const standards = (await loadSectionPayload('ARCH_STANDARDS')) || [];
+    const standard = standards.find((x) => x.id === standardId);
+    if (!standard) {
+      sendJson(res, 404, { error: 'not_found', message: 'standard not found' });
+      return true;
+    }
+    sendJson(res, 200, standard);
     return true;
   }
 

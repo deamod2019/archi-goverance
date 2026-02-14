@@ -359,6 +359,42 @@ paths:
       responses:
         '200': { description: Compliance rule list }
 
+  /api/v1/standards:
+    get:
+      summary: List architecture standards
+      parameters:
+        - in: query
+          name: category
+          schema: { type: string }
+        - in: query
+          name: status
+          schema: { type: string }
+        - in: query
+          name: projection
+          schema: { type: string, enum: [full, summary] }
+        - in: query
+          name: fields
+          schema: { type: string, description: Comma-separated field projection paths }
+      responses:
+        '200': { description: Standard list }
+
+  /api/v1/standards/rule-map:
+    get:
+      summary: Get rule to standard mapping
+      responses:
+        '200': { description: Rule map payload }
+
+  /api/v1/standards/{id}:
+    get:
+      summary: Get architecture standard detail
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Standard detail payload }
+
   /api/v1/capabilities:
     get:
       summary: List capabilities

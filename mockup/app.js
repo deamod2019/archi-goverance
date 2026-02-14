@@ -34,6 +34,14 @@ function lifecycleTagClass(lifecycle) {
   if (x === 'FORBIDDEN' || x === 'CRITICAL' || x === 'MISSING') return 'tag-core';
   return 'tag-general';
 }
+function getStandardsCatalog() {
+  const state = VIEW_CACHE.standardsCatalog;
+  if (state?.status === 'ready' && Array.isArray(state.data)) return state.data;
+  return Array.isArray(ARCH_STANDARDS) ? ARCH_STANDARDS : [];
+}
+function ensureStandardsCatalog() {
+  return ensureViewData('standardsCatalog', () => apiRequest('/api/v1/standards'));
+}
 function showPersonPopup(name) {
   const p = PERSONS[name]; if (!p) return;
   closePopup();
@@ -164,7 +172,7 @@ function renderV1Treemap(c, b) {
   MOCK.domains = state.data;
 
   const total = MOCK.domains.reduce((s, d) => s + d.apps, 0);
-  const totalSys = MOCK.domains.reduce((s, d) => s + (MOCK.systems[d.id] || []).length, 0);
+  const totalSys = MOCK.domains.reduce((s, d) => s + Number(d.systems || 0), 0);
   const stats = `<div class="stats-row fade-in">
     <div class="stat-card"><div class="label">业务域</div><div class="value">${MOCK.domains.length}</div></div>
     <div class="stat-card"><div class="label">系统总数</div><div class="value" style="color:var(--cyan)">${totalSys}</div></div>
@@ -182,7 +190,7 @@ function renderV1Treemap(c, b) {
   sorted.forEach((d, i) => {
     if (i >= positions.length) return;
     const p = positions[i];
-    const sysCnt = (MOCK.systems[d.id] || []).length;
+    const sysCnt = Number(d.systems || 0);
     const opacity = d.health === 'warn' ? 0.7 : 0.85;
     cells += `<div class="treemap-cell" style="left:${p.x}%;top:${p.y}%;width:${p.w}%;height:${p.h}%;background:${d.color}${Math.round(opacity * 255).toString(16)}" onclick="drillDomain('${d.id}')">
       <div class="cell-name">${d.name}</div>
@@ -294,7 +302,7 @@ function renderV1System(c, b) {
     renderLoadError(c, state.error);
     return;
   }
-  const subsystems = MOCK.subsystems[s.id] || generateSubsystems(s);
+  const subsystems = MOCK.subsystems[s.id] || [];
 
   // System profile section
   let html = `<div class="entity-profile fade-in">
@@ -330,35 +338,19 @@ function renderV1System(c, b) {
   html += `<h3 style="margin:20px 0 12px;font-size:15px" class="fade-in">📂 下辖子系统 (${subsystems.length})</h3><div class="cards-grid fade-in">`;
   subsystems.forEach(sub => {
     const stTag = sub.status === 'RUNNING' ? 'tag-running' : sub.status === 'BUILDING' ? 'tag-building' : 'tag-planning';
+    const techName = String(sub.techStack || '').split('/')[0]?.trim() || 'N/A';
     html += `<div class="card" onclick="drillSubsystem('${sub.id}')">
       <div class="card-title">${sub.name} <span class="tag" style="font-size:10px;opacity:0.7">${sub.code}</span></div>
       <div class="card-meta"><span class="tag ${stTag}">${sub.status}</span>${renderClassification(sub)}<span class="tag tag-general">${teamLink(sub.team)}</span></div>
-      <div class="card-stats"><span>📦 ${sub.apps}个应用</span><span>🔧 ${sub.techStack.split('/')[0].trim()}</span></div>
+      <div class="card-stats"><span>📦 ${sub.apps}个应用</span><span>🔧 ${techName}</span></div>
       ${renderTags(sub.tags)}
-      <div class="card-desc">${sub.description.substring(0, 60)}...</div>
+      <div class="card-desc">${String(sub.description || '').substring(0, 60)}...</div>
     </div>`;
   });
-  c.innerHTML = html + '</div>';
-}
-
-function generateSubsystems(sys) {
-  const subs = [];
-  for (let i = 1; i <= sys.subsystems; i++) {
-    subs.push({
-      id: `${sys.id}-sub-${i}`,
-      name: `${sys.name}子系统${i}`,
-      code: `SUB-${sys.code || sys.id.toUpperCase()}-${i}`,
-      description: `${sys.name}的第${i}个子系统模块，负责相关业务功能。`,
-      owner: sys.architect || '未分配',
-      team: `${sys.team}-${String.fromCharCode(64 + i)}`,
-      techStack: sys.techStack || 'Java 17 / Spring Boot 3.x',
-      status: sys.status,
-      createdDate: sys.createdDate || '2023-01-01',
-      apps: Math.ceil(sys.apps / sys.subsystems)
-    });
+  if (!subsystems.length) {
+    html += '<div class="card"><div class="card-title">暂无子系统</div><div class="card-desc">该系统暂未登记子系统结构。</div></div>';
   }
-  MOCK.subsystems[sys.id] = subs;
-  return subs;
+  c.innerHTML = html + '</div>';
 }
 
 function drillSubsystem(subId) {
@@ -372,7 +364,7 @@ function drillSubsystem(subId) {
 function renderV1Subsystem(c, b) {
   b.innerHTML = `<span onclick="switchView('v1')">全景图</span> &gt; <span onclick="v1Level=0;render()">业务能力</span> &gt; <span onclick="v1Level=1;render()">${v1Domain.name}</span> &gt; <span onclick="v1Level=2;render()">${v1System.name}</span> &gt; ${v1Subsystem.name}`;
   const sub = v1Subsystem;
-  const apps = MOCK.apps[sub.id] || generateApps(sub);
+  const apps = MOCK.apps[sub.id] || [];
 
   // Subsystem profile section
   let html = `<div class="entity-profile fade-in">
@@ -405,14 +397,10 @@ function renderV1Subsystem(c, b) {
       ${renderTags(a.tags)}
     </div>`;
   });
+  if (!apps.length) {
+    html += '<div class="tree-node"><div class="node-name">暂无应用</div><div class="node-meta">该子系统暂未登记应用。</div></div>';
+  }
   c.innerHTML = html + '</div>';
-}
-
-function generateApps(sub) {
-  const apps = [];
-  for (let i = 1; i <= sub.apps; i++) apps.push({ id: `${sub.id}-app-${i}`, name: `${sub.name}服务${i}`, type: i % 3 === 0 ? 'BATCH' : i % 2 === 0 ? 'MONOLITH' : 'MICROSERVICE', status: 'RUNNING', owner: sub.owner || '未分配', gitRepo: `git@bank.com:auto/${sub.id}-app-${i}.git` });
-  MOCK.apps[sub.id] = apps;
-  return apps;
 }
 
 function drillApp(appId) {
@@ -438,8 +426,9 @@ function renderV1Profile(c, b) {
     renderLoading(c, '应用画像加载中', `正在获取 ${v1App.name} 画像...`);
     ensureViewData(cacheKey, async () => {
       const appId = encodeURIComponent(v1App.id);
-      const [profile, interfaces, artifacts, techComponents, dataObjects, runtime, compliance] = await Promise.all([
+      const [profile, depGraph, interfaces, artifacts, techComponents, dataObjects, runtime, compliance] = await Promise.all([
         apiRequest(`/api/v1/panorama/applications/${appId}/profile`),
+        apiRequest(`/api/v1/panorama/dependency-graph?app_id=${appId}&depth=1`).catch(() => null),
         apiRequest(`/api/v1/panorama/applications/${appId}/interfaces`).catch(() => null),
         apiRequest(`/api/v1/panorama/applications/${appId}/artifacts`).catch(() => []),
         apiRequest(`/api/v1/panorama/applications/${appId}/tech-components`).catch(() => []),
@@ -447,7 +436,7 @@ function renderV1Profile(c, b) {
         apiRequest(`/api/v1/panorama/applications/${appId}/runtime`).catch(() => null),
         apiRequest(`/api/v1/panorama/applications/${appId}/compliance`).catch(() => null)
       ]);
-      return { profile, interfaces, artifacts, techComponents, dataObjects, runtime, compliance };
+      return { profile, depGraph, interfaces, artifacts, techComponents, dataObjects, runtime, compliance };
     })
       .then((data) => {
         if (data?.profile?.profile) v1App = data.profile.profile;
@@ -469,7 +458,9 @@ function renderV1Profile(c, b) {
   const viewData = state.data || {};
   const profileData = viewData.profile || {};
   if (profileData.profile) v1App = profileData.profile;
-  const deps = profileData.dependencies || MOCK.dependencies.filter(d => d.source === v1App.id || d.target === v1App.id);
+  const deps = Array.isArray(profileData.dependencies) && profileData.dependencies.length
+    ? profileData.dependencies
+    : ((viewData.depGraph?.edges || []).filter(d => d.source === v1App.id || d.target === v1App.id));
   const interfaces = viewData.interfaces || { groupCount: 0, endpointCount: 0, protocols: {} };
   const artifacts = viewData.artifacts || [];
   const techComponents = viewData.techComponents || [];
@@ -1041,7 +1032,8 @@ function getMatchedStandards() {
   // Simple matching: A-class gets all, B-class gets most, C-class gets basic
   const cls = reviewFormData.classification || 'B';
   const tags = reviewFormData.tags || [];
-  return ARCH_STANDARDS.filter(std => {
+  const standards = getStandardsCatalog();
+  return standards.filter(std => {
     if (std.id === 'STD-HA') return cls === 'A' || cls === 'B';
     if (std.id === 'STD-DDB') return true;
     if (std.id === 'STD-XC') return tags.includes('信创') || cls === 'A';
@@ -1359,11 +1351,29 @@ let stdDetailId = null;
 function renderStandards(c, b) {
   if (stdDetailId) { renderStandardDetail(c, b, stdDetailId); return; }
   b.innerHTML = '<span onclick="switchView(\'v1\')">全景图</span> &gt; 架构规范';
-  const totalRules = ARCH_STANDARDS.reduce((s, st) => s + st.rules.length, 0);
+  const state = VIEW_CACHE.standardsCatalog;
+  if (!state) {
+    renderLoading(c, '架构规范加载中', '正在获取规范目录...');
+    ensureStandardsCatalog()
+      .then(() => { if (currentView === 'standards' && !stdDetailId) render(); })
+      .catch(() => { if (currentView === 'standards' && !stdDetailId) render(); });
+    return;
+  }
+  if (state.status === 'loading') {
+    renderLoading(c, '架构规范加载中', '正在获取规范目录...');
+    return;
+  }
+  if (state.status === 'error') {
+    renderLoadError(c, state.error);
+    return;
+  }
+
+  const standards = state.data || [];
+  const totalRules = standards.reduce((s, st) => s + st.rules.length, 0);
   const methods = {};
-  ARCH_STANDARDS.forEach(st => st.rules.forEach(r => { methods[r.checkMethod] = (methods[r.checkMethod] || 0) + 1; }));
+  standards.forEach(st => st.rules.forEach(r => { methods[r.checkMethod] = (methods[r.checkMethod] || 0) + 1; }));
   let html = `<div class="stats-row fade-in">
-    <div class="stat-card"><div class="label">规范文档</div><div class="value" style="color:var(--accent)">${ARCH_STANDARDS.length}</div></div>
+    <div class="stat-card"><div class="label">规范文档</div><div class="value" style="color:var(--accent)">${standards.length}</div></div>
     <div class="stat-card"><div class="label">检查规则</div><div class="value" style="color:var(--cyan,#06b6d4)">${totalRules}</div></div>
     <div class="stat-card"><div class="label">评审检查</div><div class="value">${methods['评审'] || 0}</div><div class="sub">条</div></div>
     <div class="stat-card"><div class="label">测试检查</div><div class="value">${methods['测试'] || 0}</div><div class="sub">条</div></div>
@@ -1371,7 +1381,7 @@ function renderStandards(c, b) {
   </div>`;
   // Group by category
   const cats = {};
-  ARCH_STANDARDS.forEach(st => { if (!cats[st.category]) cats[st.category] = []; cats[st.category].push(st); });
+  standards.forEach(st => { if (!cats[st.category]) cats[st.category] = []; cats[st.category].push(st); });
   Object.keys(cats).forEach(cat => {
     html += `<h3 style="margin:24px 0 12px;font-size:15px" class="fade-in">${cat}</h3><div class="cards-grid fade-in">`;
     cats[cat].forEach(st => {
@@ -1393,8 +1403,27 @@ function renderStandards(c, b) {
 }
 
 function renderStandardDetail(c, b, stdId) {
-  const std = ARCH_STANDARDS.find(s => s.id === stdId);
-  if (!std) return;
+  const state = VIEW_CACHE.standardsCatalog;
+  if (!state) {
+    renderLoading(c, '规范详情加载中', '正在获取规范详情...');
+    ensureStandardsCatalog()
+      .then(() => { if (currentView === 'standards' && stdDetailId === stdId) render(); })
+      .catch(() => { if (currentView === 'standards' && stdDetailId === stdId) render(); });
+    return;
+  }
+  if (state.status === 'loading') {
+    renderLoading(c, '规范详情加载中', '正在获取规范详情...');
+    return;
+  }
+  if (state.status === 'error') {
+    renderLoadError(c, state.error);
+    return;
+  }
+  const std = getStandardsCatalog().find(s => s.id === stdId);
+  if (!std) {
+    renderLoadError(c, new Error('规范不存在'));
+    return;
+  }
   b.innerHTML = `<span onclick="switchView('v1')">全景图</span> &gt; <span onclick="stdDetailId=null;switchView('standards')">架构规范</span> &gt; ${std.name}`;
 
   let html = `<div class="entity-profile fade-in">
