@@ -832,6 +832,10 @@ paths:
         '200': { description: Review list }
     post:
       summary: Create review draft
+      parameters:
+        - in: header
+          name: X-User
+          schema: { type: string, description: Optional operator id/name used as actor }
       requestBody:
         required: true
         content:
@@ -870,6 +874,9 @@ paths:
           name: id
           required: true
           schema: { type: string }
+        - in: header
+          name: X-User
+          schema: { type: string }
       responses:
         '200': { description: Submit result }
 
@@ -880,6 +887,9 @@ paths:
         - in: path
           name: id
           required: true
+          schema: { type: string }
+        - in: header
+          name: X-User
           schema: { type: string }
       responses:
         '200': { description: Resubmit result }
@@ -902,6 +912,9 @@ paths:
         - in: path
           name: id
           required: true
+          schema: { type: string }
+        - in: header
+          name: X-User
           schema: { type: string }
       responses:
         '200': { description: Compliance re-run result }
@@ -928,6 +941,9 @@ paths:
           name: id
           required: true
           schema: { type: string }
+        - in: header
+          name: X-User
+          schema: { type: string }
       responses:
         '200': { description: Approve result }
 
@@ -938,6 +954,9 @@ paths:
         - in: path
           name: id
           required: true
+          schema: { type: string }
+        - in: header
+          name: X-User
           schema: { type: string }
       responses:
         '200': { description: Reject result }

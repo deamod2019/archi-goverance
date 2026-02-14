@@ -188,8 +188,16 @@ function closePopup() {
 }
 
 async function apiRequest(url, options = {}) {
+  const actingUser = String(window.MOCK?.currentUser || '张').trim() || '张';
+  const encodedActor = encodeURIComponent(actingUser);
+  const requestHeaders = {
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+    'X-User': encodedActor,
+    ...(options.headers || {})
+  };
   const response = await fetch(url, {
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    headers: requestHeaders,
     ...options
   });
   if (!response.ok) {
