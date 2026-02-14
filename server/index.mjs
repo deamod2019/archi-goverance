@@ -1595,6 +1595,299 @@ function normalizeAppProfilePatch(raw) {
   return updates;
 }
 
+function todayYmd() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function normalizeTags(raw, fieldName = 'tags') {
+  if (raw == null) return [];
+  if (Array.isArray(raw)) {
+    return raw.map((x) => String(x).trim()).filter(Boolean);
+  }
+  if (typeof raw === 'string') {
+    return raw.split(',').map((x) => x.trim()).filter(Boolean);
+  }
+  throw new HttpError(400, `${fieldName} must be an array or comma-separated string`);
+}
+
+function normalizeDateValue(raw, fieldName, fallback = todayYmd()) {
+  const text = String(raw || '').trim();
+  if (!text) return fallback;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    throw new HttpError(400, `${fieldName} must be YYYY-MM-DD`);
+  }
+  return text;
+}
+
+function normalizeNonNegativeInt(raw, fieldName, fallback = 0) {
+  if (raw == null || raw === '') return fallback;
+  const n = Number.parseInt(String(raw), 10);
+  if (!Number.isFinite(n) || n < 0) {
+    throw new HttpError(400, `${fieldName} must be a non-negative integer`);
+  }
+  return n;
+}
+
+function normalizePercent(raw, fieldName, fallback = 0) {
+  if (raw == null || raw === '') return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0 || n > 100) {
+    throw new HttpError(400, `${fieldName} must be between 0 and 100`);
+  }
+  return Math.round(n);
+}
+
+function normalizeEnum(raw, fieldName, allowed, fallback) {
+  const value = String(raw == null ? '' : raw).trim();
+  const normalized = value ? value.toUpperCase() : fallback;
+  if (!allowed.includes(normalized)) {
+    throw new HttpError(400, `${fieldName} must be one of: ${allowed.join(', ')}`);
+  }
+  return normalized;
+}
+
+function defaultDomainColor(domainId) {
+  const palette = ['#6366f1', '#3b82f6', '#10b981', '#f59e0b', '#06b6d4', '#a855f7', '#ec4899'];
+  const key = String(domainId || '').trim();
+  let hash = 0;
+  for (let i = 0; i < key.length; i += 1) hash = ((hash << 5) - hash + key.charCodeAt(i)) | 0;
+  return palette[Math.abs(hash) % palette.length];
+}
+
+function normalizeDomainInput(raw, fallbackId) {
+  const id = String(raw?.id || fallbackId || '').trim();
+  const name = String(raw?.name || '').trim();
+  const code = String(raw?.code || `DOM-${id.toUpperCase()}`).trim();
+  const status = normalizeEnum(raw?.status, 'domain.status', ['ACTIVE', 'INACTIVE'], 'ACTIVE');
+  const createdDate = normalizeDateValue(raw?.createdDate, 'domain.createdDate');
+  const lastReviewDate = normalizeDateValue(raw?.lastReviewDate, 'domain.lastReviewDate', createdDate);
+  const apps = normalizeNonNegativeInt(raw?.apps, 'domain.apps', 0);
+  const systems = normalizeNonNegativeInt(raw?.systems, 'domain.systems', 0);
+  const compliance = normalizePercent(raw?.compliance, 'domain.compliance', 0);
+  const health = String(raw?.health || 'good').trim().toLowerCase();
+  const priority = String(raw?.priority || 'P1').trim().toUpperCase();
+
+  if (!id) throw new HttpError(400, 'domain.id is required');
+  if (!name) throw new HttpError(400, 'domain.name is required');
+  if (!code) throw new HttpError(400, 'domain.code is required');
+  if (!['good', 'warn', 'bad'].includes(health)) {
+    throw new HttpError(400, 'domain.health must be one of: good, warn, bad');
+  }
+  if (!['P0', 'P1', 'P2', 'P3'].includes(priority)) {
+    throw new HttpError(400, 'domain.priority must be one of: P0, P1, P2, P3');
+  }
+
+  return {
+    id,
+    name,
+    code,
+    description: String(raw?.description || '').trim(),
+    owner: String(raw?.owner || '').trim(),
+    architect: String(raw?.architect || '').trim(),
+    status,
+    createdDate,
+    lastReviewDate,
+    apps,
+    systems,
+    compliance,
+    color: String(raw?.color || defaultDomainColor(id)).trim() || defaultDomainColor(id),
+    health,
+    bizGoal: String(raw?.bizGoal || '').trim(),
+    priority
+  };
+}
+
+function normalizeSystemInput(raw, fallbackId) {
+  const id = String(raw?.id || fallbackId || '').trim();
+  const domainId = String(raw?.domainId || raw?.domain_id || '').trim();
+  const name = String(raw?.name || '').trim();
+  const code = String(raw?.code || `SYS-${id.toUpperCase()}`).trim();
+  const level = normalizeEnum(raw?.level, 'system.level', ['CORE', 'IMPORTANT', 'GENERAL'], 'GENERAL');
+  const status = normalizeEnum(raw?.status, 'system.status', ['RUNNING', 'BUILDING', 'PLANNING', 'OFFLINE', 'RETIRED'], 'RUNNING');
+  const createdDate = normalizeDateValue(raw?.createdDate, 'system.createdDate');
+  const lastDeployDate = normalizeDateValue(raw?.lastDeployDate, 'system.lastDeployDate', createdDate);
+
+  if (!id) throw new HttpError(400, 'system.id is required');
+  if (!domainId) throw new HttpError(400, 'system.domainId is required');
+  if (!name) throw new HttpError(400, 'system.name is required');
+
+  const result = {
+    id,
+    domainId,
+    name,
+    code,
+    level,
+    status,
+    description: String(raw?.description || '').trim(),
+    owner: String(raw?.owner || '').trim(),
+    architect: String(raw?.architect || '').trim(),
+    team: String(raw?.team || '').trim(),
+    teamSize: normalizeNonNegativeInt(raw?.teamSize, 'system.teamSize', 0),
+    techStack: String(raw?.techStack || '').trim(),
+    createdDate,
+    lastDeployDate,
+    apps: normalizeNonNegativeInt(raw?.apps, 'system.apps', 0),
+    subsystems: normalizeNonNegativeInt(raw?.subsystems, 'system.subsystems', 0),
+    deployMode: String(raw?.deployMode || '').trim(),
+    dataCenters: String(raw?.dataCenters || '').trim(),
+    tags: normalizeTags(raw?.tags, 'system.tags')
+  };
+
+  if (raw?.classification != null && String(raw.classification).trim()) {
+    result.classification = normalizeEnum(raw.classification, 'system.classification', ['A', 'B', 'C'], 'B');
+  }
+  if (raw?.securityLevel != null && String(raw.securityLevel).trim()) {
+    result.securityLevel = normalizeEnum(raw.securityLevel, 'system.securityLevel', ['S1', 'S2', 'S3'], 'S2');
+  }
+  if (raw?.dataLevel != null && String(raw.dataLevel).trim()) {
+    result.dataLevel = normalizeEnum(raw.dataLevel, 'system.dataLevel', ['L1', 'L2', 'L3'], 'L2');
+  }
+  return result;
+}
+
+function normalizeSubsystemInput(raw, fallbackId) {
+  const id = String(raw?.id || fallbackId || '').trim();
+  const systemId = String(raw?.systemId || raw?.system_id || '').trim();
+  const name = String(raw?.name || '').trim();
+  const code = String(raw?.code || `SUB-${id.toUpperCase()}`).trim();
+  const status = normalizeEnum(raw?.status, 'subsystem.status', ['RUNNING', 'BUILDING', 'PLANNING', 'OFFLINE', 'RETIRED'], 'RUNNING');
+  const createdDate = normalizeDateValue(raw?.createdDate, 'subsystem.createdDate');
+
+  if (!id) throw new HttpError(400, 'subsystem.id is required');
+  if (!systemId) throw new HttpError(400, 'subsystem.systemId is required');
+  if (!name) throw new HttpError(400, 'subsystem.name is required');
+
+  const result = {
+    id,
+    systemId,
+    name,
+    code,
+    description: String(raw?.description || '').trim(),
+    owner: String(raw?.owner || '').trim(),
+    team: String(raw?.team || '').trim(),
+    techStack: String(raw?.techStack || '').trim(),
+    status,
+    createdDate,
+    apps: normalizeNonNegativeInt(raw?.apps, 'subsystem.apps', 0),
+    tags: normalizeTags(raw?.tags, 'subsystem.tags')
+  };
+  if (raw?.classification != null && String(raw.classification).trim()) {
+    result.classification = normalizeEnum(raw.classification, 'subsystem.classification', ['A', 'B', 'C'], 'B');
+  }
+  if (raw?.securityLevel != null && String(raw.securityLevel).trim()) {
+    result.securityLevel = normalizeEnum(raw.securityLevel, 'subsystem.securityLevel', ['S1', 'S2', 'S3'], 'S2');
+  }
+  if (raw?.dataLevel != null && String(raw.dataLevel).trim()) {
+    result.dataLevel = normalizeEnum(raw.dataLevel, 'subsystem.dataLevel', ['L1', 'L2', 'L3'], 'L2');
+  }
+  return result;
+}
+
+function normalizeApplicationInput(raw, fallbackId) {
+  const id = String(raw?.id || fallbackId || '').trim();
+  const subsystemId = String(raw?.subsystemId || raw?.subsystem_id || '').trim();
+  const name = String(raw?.name || '').trim();
+  const type = normalizeEnum(raw?.type, 'application.type', ['MICROSERVICE', 'MONOLITH', 'SPA', 'BATCH'], 'MICROSERVICE');
+  const status = normalizeEnum(raw?.status, 'application.status', ['RUNNING', 'BUILDING', 'PLANNING', 'OFFLINE', 'RETIRED'], 'RUNNING');
+  const owner = String(raw?.owner || '').trim();
+
+  if (!id) throw new HttpError(400, 'application.id is required');
+  if (!subsystemId) throw new HttpError(400, 'application.subsystemId is required');
+  if (!name) throw new HttpError(400, 'application.name is required');
+  if (!owner) throw new HttpError(400, 'application.owner is required');
+
+  const result = {
+    id,
+    subsystemId,
+    name,
+    type,
+    status,
+    owner,
+    gitRepo: String(raw?.gitRepo || '').trim(),
+    tags: normalizeTags(raw?.tags, 'application.tags')
+  };
+  if (raw?.classification != null && String(raw.classification).trim()) {
+    result.classification = normalizeEnum(raw.classification, 'application.classification', ['A', 'B', 'C'], 'B');
+  }
+  if (raw?.securityLevel != null && String(raw.securityLevel).trim()) {
+    result.securityLevel = normalizeEnum(raw.securityLevel, 'application.securityLevel', ['S1', 'S2', 'S3'], 'S2');
+  }
+  if (raw?.dataLevel != null && String(raw.dataLevel).trim()) {
+    result.dataLevel = normalizeEnum(raw.dataLevel, 'application.dataLevel', ['L1', 'L2', 'L3'], 'L2');
+  }
+  return result;
+}
+
+async function recomputeDomainStats(client, domainId) {
+  const statsRes = await client.query(
+    `
+    SELECT
+      (SELECT COUNT(*)::int FROM systems WHERE domain_id = $1) AS systems,
+      (
+        SELECT COUNT(a.id)::int
+        FROM applications a
+        JOIN subsystems ss ON ss.id = a.subsystem_id
+        JOIN systems sy ON sy.id = ss.system_id
+        WHERE sy.domain_id = $1
+      ) AS apps
+    `,
+    [domainId]
+  );
+  if (!statsRes.rows.length) return;
+  const stats = statsRes.rows[0];
+  await client.query(
+    `
+    UPDATE domains
+    SET payload = payload || jsonb_build_object('systems', $2::int, 'apps', $3::int),
+        updated_at = now()
+    WHERE id = $1
+    `,
+    [domainId, stats.systems || 0, stats.apps || 0]
+  );
+}
+
+async function recomputeSystemStats(client, systemId) {
+  const statsRes = await client.query(
+    `
+    SELECT
+      (SELECT COUNT(*)::int FROM subsystems WHERE system_id = $1) AS subsystems,
+      (
+        SELECT COUNT(a.id)::int
+        FROM applications a
+        JOIN subsystems ss ON ss.id = a.subsystem_id
+        WHERE ss.system_id = $1
+      ) AS apps
+    `,
+    [systemId]
+  );
+  if (!statsRes.rows.length) return;
+  const stats = statsRes.rows[0];
+  await client.query(
+    `
+    UPDATE systems
+    SET payload = payload || jsonb_build_object('subsystems', $2::int, 'apps', $3::int),
+        updated_at = now()
+    WHERE id = $1
+    `,
+    [systemId, stats.subsystems || 0, stats.apps || 0]
+  );
+}
+
+async function recomputeSubsystemStats(client, subsystemId) {
+  const statsRes = await client.query('SELECT COUNT(*)::int AS apps FROM applications WHERE subsystem_id = $1', [subsystemId]);
+  if (!statsRes.rows.length) return;
+  const stats = statsRes.rows[0];
+  await client.query(
+    `
+    UPDATE subsystems
+    SET payload = payload || jsonb_build_object('apps', $2::int),
+        updated_at = now()
+    WHERE id = $1
+    `,
+    [subsystemId, stats.apps || 0]
+  );
+}
+
 function parseCsv(rawValue) {
   if (!rawValue) return [];
   return rawValue
@@ -2183,6 +2476,73 @@ async function handleApi(req, res, url) {
     return true;
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/v1/panorama/domains') {
+    const body = await readJsonBody(req);
+    const domain = normalizeDomainInput(body);
+    try {
+      await pool.query('INSERT INTO domains (id, payload) VALUES ($1, $2::jsonb)', [domain.id, JSON.stringify(domain)]);
+    } catch (error) {
+      if (String(error.code) === '23505') {
+        throw new HttpError(409, `domain '${domain.id}' already exists`);
+      }
+      throw error;
+    }
+    sendJson(res, 201, domain);
+    return true;
+  }
+
+  const domainDetailMatch = url.pathname.match(/^\/api\/v1\/panorama\/domains\/([^/]+)$/);
+  if (req.method === 'PUT' && domainDetailMatch) {
+    const domainId = decodeURIComponent(domainDetailMatch[1]);
+    const body = await readJsonBody(req);
+    const current = await pool.query('SELECT payload FROM domains WHERE id = $1', [domainId]);
+    if (!current.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'domain not found' });
+      return true;
+    }
+    const merged = { ...current.rows[0].payload, ...body, id: domainId };
+    const next = normalizeDomainInput(merged, domainId);
+    await pool.query('UPDATE domains SET payload = $2::jsonb, updated_at = now() WHERE id = $1', [domainId, JSON.stringify(next)]);
+    sendJson(res, 200, next);
+    return true;
+  }
+
+  if (req.method === 'DELETE' && domainDetailMatch) {
+    const domainId = decodeURIComponent(domainDetailMatch[1]);
+    const cascade = String(url.searchParams.get('cascade') || '').toLowerCase() === 'true';
+    const statsRes = await pool.query(
+      `
+      SELECT
+        (SELECT COUNT(*)::int FROM systems WHERE domain_id = $1) AS systems,
+        (
+          SELECT COUNT(ss.id)::int
+          FROM subsystems ss
+          JOIN systems sy ON sy.id = ss.system_id
+          WHERE sy.domain_id = $1
+        ) AS subsystems,
+        (
+          SELECT COUNT(a.id)::int
+          FROM applications a
+          JOIN subsystems ss ON ss.id = a.subsystem_id
+          JOIN systems sy ON sy.id = ss.system_id
+          WHERE sy.domain_id = $1
+        ) AS applications
+      `,
+      [domainId]
+    );
+    const summary = statsRes.rows[0] || { systems: 0, subsystems: 0, applications: 0 };
+    if (!cascade && Number(summary.systems || 0) > 0) {
+      throw new HttpError(409, `domain '${domainId}' has child systems; use cascade=true to delete`);
+    }
+    const deleted = await pool.query('DELETE FROM domains WHERE id = $1 RETURNING id', [domainId]);
+    if (!deleted.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'domain not found' });
+      return true;
+    }
+    sendJson(res, 200, { id: domainId, deleted: true, cascade: summary });
+    return true;
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/v1/panorama/dependency-graph') {
     const domainId = url.searchParams.get('domain_id');
     const focusApp = url.searchParams.get('app_id');
@@ -2225,6 +2585,509 @@ async function handleApi(req, res, url) {
     return true;
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/systems') {
+    const domainId = url.searchParams.get('domain_id');
+    const level = url.searchParams.get('level');
+    const status = url.searchParams.get('status');
+    const fields = resolveProjectionFields(url, SYSTEM_PROJECTIONS);
+    const params = [];
+    let sql = `
+      SELECT
+        s.domain_id,
+        d.payload->>'name' AS domain_name,
+        s.payload
+      FROM systems s
+      JOIN domains d ON d.id = s.domain_id
+    `;
+    if (domainId) {
+      params.push(domainId);
+      sql += ` WHERE s.domain_id = $${params.length}`;
+    }
+    sql += `
+      ORDER BY s.payload->>'name'
+    `;
+    const { rows } = await pool.query(sql, params);
+    let data = rows.map((row) => ({
+      ...row.payload,
+      domainId: row.domain_id,
+      domainName: row.domain_name
+    }));
+    if (level) data = data.filter((s) => String(s.level).toUpperCase() === String(level).toUpperCase());
+    if (status) data = data.filter((s) => String(s.status).toUpperCase() === String(status).toUpperCase());
+    sendJson(res, 200, projectData(data, fields));
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/panorama/systems') {
+    const body = await readJsonBody(req);
+    const system = normalizeSystemInput(body);
+    const result = await withTransaction(async (client) => {
+      const domainRes = await client.query('SELECT id FROM domains WHERE id = $1', [system.domainId]);
+      if (!domainRes.rows.length) throw new HttpError(404, `domain '${system.domainId}' not found`);
+      await client.query(
+        'INSERT INTO systems (id, domain_id, payload) VALUES ($1, $2, $3::jsonb)',
+        [system.id, system.domainId, JSON.stringify({ ...system, domainId: undefined })]
+      );
+      await recomputeSystemStats(client, system.id);
+      await recomputeDomainStats(client, system.domainId);
+      return system;
+    });
+    sendJson(res, 201, result);
+    return true;
+  }
+
+  const systemDetailMatch = url.pathname.match(/^\/api\/v1\/panorama\/systems\/([^/]+)$/);
+  if (req.method === 'PUT' && systemDetailMatch) {
+    const systemId = decodeURIComponent(systemDetailMatch[1]);
+    const body = await readJsonBody(req);
+    const saved = await withTransaction(async (client) => {
+      const currentRes = await client.query('SELECT domain_id, payload FROM systems WHERE id = $1', [systemId]);
+      if (!currentRes.rows.length) throw new HttpError(404, 'system not found');
+      const current = currentRes.rows[0];
+      const merged = { ...current.payload, ...body, id: systemId, domainId: body?.domainId || current.domain_id };
+      const next = normalizeSystemInput(merged, systemId);
+      const targetDomainRes = await client.query('SELECT id FROM domains WHERE id = $1', [next.domainId]);
+      if (!targetDomainRes.rows.length) throw new HttpError(404, `domain '${next.domainId}' not found`);
+      const payload = { ...next };
+      delete payload.domainId;
+      await client.query(
+        'UPDATE systems SET domain_id = $2, payload = $3::jsonb, updated_at = now() WHERE id = $1',
+        [systemId, next.domainId, JSON.stringify(payload)]
+      );
+      await recomputeSystemStats(client, systemId);
+      await recomputeDomainStats(client, current.domain_id);
+      if (next.domainId !== current.domain_id) {
+        await recomputeDomainStats(client, next.domainId);
+      }
+      return next;
+    });
+    sendJson(res, 200, saved);
+    return true;
+  }
+
+  if (req.method === 'DELETE' && systemDetailMatch) {
+    const systemId = decodeURIComponent(systemDetailMatch[1]);
+    const cascade = String(url.searchParams.get('cascade') || '').toLowerCase() === 'true';
+    const result = await withTransaction(async (client) => {
+      const preRes = await client.query(
+        `
+        SELECT
+          sy.domain_id,
+          (SELECT COUNT(*)::int FROM subsystems WHERE system_id = sy.id) AS subsystems,
+          (
+            SELECT COUNT(a.id)::int
+            FROM applications a
+            JOIN subsystems ss ON ss.id = a.subsystem_id
+            WHERE ss.system_id = sy.id
+          ) AS applications
+        FROM systems sy
+        WHERE sy.id = $1
+        `,
+        [systemId]
+      );
+      if (!preRes.rows.length) throw new HttpError(404, 'system not found');
+      const summary = preRes.rows[0];
+      if (!cascade && Number(summary.subsystems || 0) > 0) {
+        throw new HttpError(409, `system '${systemId}' has child subsystems; use cascade=true to delete`);
+      }
+      await client.query('DELETE FROM systems WHERE id = $1', [systemId]);
+      await recomputeDomainStats(client, summary.domain_id);
+      return { summary, domainId: summary.domain_id };
+    });
+    sendJson(res, 200, {
+      id: systemId,
+      deleted: true,
+      cascade: {
+        subsystems: result.summary.subsystems || 0,
+        applications: result.summary.applications || 0
+      },
+      domainId: result.domainId
+    });
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/subsystems') {
+    const systemId = url.searchParams.get('system_id');
+    const domainId = url.searchParams.get('domain_id');
+    const params = [];
+    let sql = `
+      SELECT
+        ss.id,
+        ss.system_id,
+        sy.domain_id,
+        sy.payload->>'name' AS system_name,
+        d.payload->>'name' AS domain_name,
+        ss.payload
+      FROM subsystems ss
+      JOIN systems sy ON sy.id = ss.system_id
+      JOIN domains d ON d.id = sy.domain_id
+    `;
+    const conditions = [];
+    if (systemId) {
+      params.push(systemId);
+      conditions.push(`ss.system_id = $${params.length}`);
+    }
+    if (domainId) {
+      params.push(domainId);
+      conditions.push(`sy.domain_id = $${params.length}`);
+    }
+    if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
+    sql += ' ORDER BY ss.payload->>\'name\'';
+    const { rows } = await pool.query(sql, params);
+    sendJson(
+      res,
+      200,
+      rows.map((row) => ({
+        ...row.payload,
+        systemId: row.system_id,
+        systemName: row.system_name,
+        domainId: row.domain_id,
+        domainName: row.domain_name
+      }))
+    );
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/panorama/subsystems') {
+    const body = await readJsonBody(req);
+    const subsystem = normalizeSubsystemInput(body);
+    const saved = await withTransaction(async (client) => {
+      const parentRes = await client.query('SELECT id, domain_id FROM systems WHERE id = $1', [subsystem.systemId]);
+      if (!parentRes.rows.length) throw new HttpError(404, `system '${subsystem.systemId}' not found`);
+      const domainId = parentRes.rows[0].domain_id;
+      const payload = { ...subsystem };
+      delete payload.systemId;
+      await client.query(
+        'INSERT INTO subsystems (id, system_id, payload) VALUES ($1, $2, $3::jsonb)',
+        [subsystem.id, subsystem.systemId, JSON.stringify(payload)]
+      );
+      await recomputeSubsystemStats(client, subsystem.id);
+      await recomputeSystemStats(client, subsystem.systemId);
+      await recomputeDomainStats(client, domainId);
+      return { ...subsystem, domainId };
+    });
+    sendJson(res, 201, saved);
+    return true;
+  }
+
+  const subsystemDetailMatch = url.pathname.match(/^\/api\/v1\/panorama\/subsystems\/([^/]+)$/);
+  if (req.method === 'PUT' && subsystemDetailMatch) {
+    const subsystemId = decodeURIComponent(subsystemDetailMatch[1]);
+    const body = await readJsonBody(req);
+    const saved = await withTransaction(async (client) => {
+      const currentRes = await client.query('SELECT system_id, payload FROM subsystems WHERE id = $1', [subsystemId]);
+      if (!currentRes.rows.length) throw new HttpError(404, 'subsystem not found');
+      const current = currentRes.rows[0];
+      const oldSystemRes = await client.query('SELECT domain_id FROM systems WHERE id = $1', [current.system_id]);
+      const oldDomainId = oldSystemRes.rows[0]?.domain_id || null;
+
+      const merged = { ...current.payload, ...body, id: subsystemId, systemId: body?.systemId || current.system_id };
+      const next = normalizeSubsystemInput(merged, subsystemId);
+
+      const targetSystemRes = await client.query('SELECT domain_id FROM systems WHERE id = $1', [next.systemId]);
+      if (!targetSystemRes.rows.length) throw new HttpError(404, `system '${next.systemId}' not found`);
+      const newDomainId = targetSystemRes.rows[0].domain_id;
+
+      const payload = { ...next };
+      delete payload.systemId;
+      await client.query(
+        'UPDATE subsystems SET system_id = $2, payload = $3::jsonb, updated_at = now() WHERE id = $1',
+        [subsystemId, next.systemId, JSON.stringify(payload)]
+      );
+      await recomputeSubsystemStats(client, subsystemId);
+      await recomputeSystemStats(client, current.system_id);
+      if (next.systemId !== current.system_id) {
+        await recomputeSystemStats(client, next.systemId);
+      }
+      if (oldDomainId) await recomputeDomainStats(client, oldDomainId);
+      if (newDomainId && newDomainId !== oldDomainId) await recomputeDomainStats(client, newDomainId);
+      return { ...next, domainId: newDomainId };
+    });
+    sendJson(res, 200, saved);
+    return true;
+  }
+
+  if (req.method === 'DELETE' && subsystemDetailMatch) {
+    const subsystemId = decodeURIComponent(subsystemDetailMatch[1]);
+    const cascade = String(url.searchParams.get('cascade') || '').toLowerCase() === 'true';
+    const result = await withTransaction(async (client) => {
+      const preRes = await client.query(
+        `
+        SELECT
+          ss.system_id,
+          sy.domain_id,
+          (SELECT COUNT(*)::int FROM applications WHERE subsystem_id = ss.id) AS apps
+        FROM subsystems ss
+        JOIN systems sy ON sy.id = ss.system_id
+        WHERE ss.id = $1
+        `,
+        [subsystemId]
+      );
+      if (!preRes.rows.length) throw new HttpError(404, 'subsystem not found');
+      const summary = preRes.rows[0];
+      if (!cascade && Number(summary.apps || 0) > 0) {
+        throw new HttpError(409, `subsystem '${subsystemId}' has child applications; use cascade=true to delete`);
+      }
+      await client.query('DELETE FROM subsystems WHERE id = $1', [subsystemId]);
+      await recomputeSystemStats(client, summary.system_id);
+      await recomputeDomainStats(client, summary.domain_id);
+      return summary;
+    });
+    sendJson(res, 200, {
+      id: subsystemId,
+      deleted: true,
+      cascade: { applications: result.apps || 0 },
+      systemId: result.system_id,
+      domainId: result.domain_id
+    });
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/applications') {
+    const subsystemId = url.searchParams.get('subsystem_id');
+    const systemId = url.searchParams.get('system_id');
+    const domainId = url.searchParams.get('domain_id');
+    const params = [];
+    let sql = `
+      SELECT
+        a.subsystem_id,
+        ss.system_id,
+        sy.domain_id,
+        ss.payload->>'name' AS subsystem_name,
+        sy.payload->>'name' AS system_name,
+        d.payload->>'name' AS domain_name,
+        a.payload
+      FROM applications a
+      JOIN subsystems ss ON ss.id = a.subsystem_id
+      JOIN systems sy ON sy.id = ss.system_id
+      JOIN domains d ON d.id = sy.domain_id
+    `;
+    const conditions = [];
+    if (subsystemId) {
+      params.push(subsystemId);
+      conditions.push(`a.subsystem_id = $${params.length}`);
+    }
+    if (systemId) {
+      params.push(systemId);
+      conditions.push(`ss.system_id = $${params.length}`);
+    }
+    if (domainId) {
+      params.push(domainId);
+      conditions.push(`sy.domain_id = $${params.length}`);
+    }
+    if (conditions.length) sql += ` WHERE ${conditions.join(' AND ')}`;
+    sql += ' ORDER BY a.payload->>\'name\'';
+    const { rows } = await pool.query(sql, params);
+    sendJson(
+      res,
+      200,
+      rows.map((row) => ({
+        ...row.payload,
+        subsystemId: row.subsystem_id,
+        subsystemName: row.subsystem_name,
+        systemId: row.system_id,
+        systemName: row.system_name,
+        domainId: row.domain_id,
+        domainName: row.domain_name
+      }))
+    );
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/v1/panorama/applications') {
+    const body = await readJsonBody(req);
+    const app = normalizeApplicationInput(body);
+    const saved = await withTransaction(async (client) => {
+      const hierarchyRes = await client.query(
+        `
+        SELECT
+          ss.id AS subsystem_id,
+          ss.payload->>'name' AS subsystem_name,
+          sy.id AS system_id,
+          sy.payload->>'name' AS system_name,
+          d.id AS domain_id,
+          d.payload->>'name' AS domain_name
+        FROM subsystems ss
+        JOIN systems sy ON sy.id = ss.system_id
+        JOIN domains d ON d.id = sy.domain_id
+        WHERE ss.id = $1
+        `,
+        [app.subsystemId]
+      );
+      if (!hierarchyRes.rows.length) throw new HttpError(404, `subsystem '${app.subsystemId}' not found`);
+      const hierarchy = hierarchyRes.rows[0];
+      const payload = { ...app };
+      delete payload.subsystemId;
+      await client.query(
+        'INSERT INTO applications (id, subsystem_id, payload) VALUES ($1, $2, $3::jsonb)',
+        [app.id, app.subsystemId, JSON.stringify(payload)]
+      );
+      await client.query(
+        `
+        INSERT INTO dependency_nodes (id, payload)
+        VALUES ($1, $2::jsonb)
+        ON CONFLICT (id)
+        DO UPDATE SET payload = EXCLUDED.payload
+        `,
+        [
+          app.id,
+          JSON.stringify({
+            id: app.id,
+            name: app.name,
+            domain: hierarchy.domain_id
+          })
+        ]
+      );
+      await recomputeSubsystemStats(client, app.subsystemId);
+      await recomputeSystemStats(client, hierarchy.system_id);
+      await recomputeDomainStats(client, hierarchy.domain_id);
+      return {
+        ...app,
+        subsystemName: hierarchy.subsystem_name,
+        systemId: hierarchy.system_id,
+        systemName: hierarchy.system_name,
+        domainId: hierarchy.domain_id,
+        domainName: hierarchy.domain_name
+      };
+    });
+    sendJson(res, 201, saved);
+    return true;
+  }
+
+  const appDetailMatch = url.pathname.match(/^\/api\/v1\/panorama\/applications\/([^/]+)$/);
+  if (req.method === 'PUT' && appDetailMatch) {
+    const appId = decodeURIComponent(appDetailMatch[1]);
+    const body = await readJsonBody(req);
+    const saved = await withTransaction(async (client) => {
+      const currentRes = await client.query(
+        `
+        SELECT
+          a.subsystem_id,
+          a.payload,
+          ss.system_id AS old_system_id,
+          sy.domain_id AS old_domain_id
+        FROM applications a
+        JOIN subsystems ss ON ss.id = a.subsystem_id
+        JOIN systems sy ON sy.id = ss.system_id
+        WHERE a.id = $1
+        `,
+        [appId]
+      );
+      if (!currentRes.rows.length) throw new HttpError(404, 'application not found');
+      const current = currentRes.rows[0];
+      const merged = { ...current.payload, ...body, id: appId, subsystemId: body?.subsystemId || current.subsystem_id };
+      const next = normalizeApplicationInput(merged, appId);
+
+      const hierarchyRes = await client.query(
+        `
+        SELECT
+          ss.id AS subsystem_id,
+          ss.payload->>'name' AS subsystem_name,
+          sy.id AS system_id,
+          sy.payload->>'name' AS system_name,
+          d.id AS domain_id,
+          d.payload->>'name' AS domain_name
+        FROM subsystems ss
+        JOIN systems sy ON sy.id = ss.system_id
+        JOIN domains d ON d.id = sy.domain_id
+        WHERE ss.id = $1
+        `,
+        [next.subsystemId]
+      );
+      if (!hierarchyRes.rows.length) throw new HttpError(404, `subsystem '${next.subsystemId}' not found`);
+      const hierarchy = hierarchyRes.rows[0];
+
+      const payload = { ...next };
+      delete payload.subsystemId;
+      await client.query(
+        'UPDATE applications SET subsystem_id = $2, payload = $3::jsonb, updated_at = now() WHERE id = $1',
+        [appId, next.subsystemId, JSON.stringify(payload)]
+      );
+      await client.query(
+        `
+        INSERT INTO dependency_nodes (id, payload)
+        VALUES ($1, $2::jsonb)
+        ON CONFLICT (id)
+        DO UPDATE SET payload = EXCLUDED.payload
+        `,
+        [
+          appId,
+          JSON.stringify({
+            id: appId,
+            name: next.name,
+            domain: hierarchy.domain_id
+          })
+        ]
+      );
+      await recomputeSubsystemStats(client, current.subsystem_id);
+      if (next.subsystemId !== current.subsystem_id) {
+        await recomputeSubsystemStats(client, next.subsystemId);
+      }
+      await recomputeSystemStats(client, current.old_system_id);
+      if (hierarchy.system_id !== current.old_system_id) {
+        await recomputeSystemStats(client, hierarchy.system_id);
+      }
+      await recomputeDomainStats(client, current.old_domain_id);
+      if (hierarchy.domain_id !== current.old_domain_id) {
+        await recomputeDomainStats(client, hierarchy.domain_id);
+      }
+      return {
+        ...next,
+        subsystemName: hierarchy.subsystem_name,
+        systemId: hierarchy.system_id,
+        systemName: hierarchy.system_name,
+        domainId: hierarchy.domain_id,
+        domainName: hierarchy.domain_name
+      };
+    });
+    sendJson(res, 200, saved);
+    return true;
+  }
+
+  if (req.method === 'DELETE' && appDetailMatch) {
+    const appId = decodeURIComponent(appDetailMatch[1]);
+    const result = await withTransaction(async (client) => {
+      const preRes = await client.query(
+        `
+        SELECT
+          a.subsystem_id,
+          ss.system_id,
+          sy.domain_id
+        FROM applications a
+        JOIN subsystems ss ON ss.id = a.subsystem_id
+        JOIN systems sy ON sy.id = ss.system_id
+        WHERE a.id = $1
+        `,
+        [appId]
+      );
+      if (!preRes.rows.length) throw new HttpError(404, 'application not found');
+      const hierarchy = preRes.rows[0];
+      await client.query('DELETE FROM applications WHERE id = $1', [appId]);
+      const depDeleted = await client.query('DELETE FROM dependencies WHERE source = $1 OR target = $1', [appId]);
+      const nodeDeleted = await client.query('DELETE FROM dependency_nodes WHERE id = $1', [appId]);
+      await recomputeSubsystemStats(client, hierarchy.subsystem_id);
+      await recomputeSystemStats(client, hierarchy.system_id);
+      await recomputeDomainStats(client, hierarchy.domain_id);
+      return {
+        hierarchy,
+        dependenciesDeleted: depDeleted.rowCount || 0,
+        nodeDeleted: (nodeDeleted.rowCount || 0) > 0
+      };
+    });
+    sendJson(res, 200, {
+      id: appId,
+      deleted: true,
+      subsystemId: result.hierarchy.subsystem_id,
+      systemId: result.hierarchy.system_id,
+      domainId: result.hierarchy.domain_id,
+      cleanup: {
+        dependenciesDeleted: result.dependenciesDeleted,
+        dependencyNodeDeleted: result.nodeDeleted
+      }
+    });
+    return true;
+  }
+
   const domainSystemsMatch = url.pathname.match(/^\/api\/v1\/panorama\/domains\/([^/]+)\/systems$/);
   if (req.method === 'GET' && domainSystemsMatch) {
     const domainId = decodeURIComponent(domainSystemsMatch[1]);
@@ -2232,7 +3095,10 @@ async function handleApi(req, res, url) {
     const status = url.searchParams.get('status');
     const fields = resolveProjectionFields(url, SYSTEM_PROJECTIONS);
     const { rows } = await pool.query('SELECT payload FROM systems WHERE domain_id = $1 ORDER BY payload->>\'name\'', [domainId]);
-    let data = rows.map((row) => row.payload);
+    let data = rows.map((row) => ({
+      ...row.payload,
+      domainId
+    }));
     if (level) data = data.filter((s) => String(s.level).toUpperCase() === String(level).toUpperCase());
     if (status) data = data.filter((s) => String(s.status).toUpperCase() === String(status).toUpperCase());
     sendJson(res, 200, projectData(data, fields));
@@ -2262,7 +3128,10 @@ async function handleApi(req, res, url) {
 
     const architecture = {
       system: systemRes.rows[0].payload,
-      subsystems: subsRes.rows.map((row) => ({ ...row.payload, applications: appsBySubsystem.get(row.id) || [] }))
+      subsystems: subsRes.rows.map((row) => ({
+        ...row.payload,
+        applications: appsBySubsystem.get(row.id) || []
+      }))
     };
     const projection = (url.searchParams.get('projection') || 'full').trim() || 'full';
     if (projection === 'summary') {

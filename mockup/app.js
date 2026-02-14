@@ -2,6 +2,7 @@
 let currentView = 'v1';
 let v1Level = 0; // 0=treemap, 1=domain, 2=system, 3=subsystem, 4=profile
 let v1Domain = null, v1System = null, v1Subsystem = null, v1App = null;
+let panoramaAdminEntity = 'domain';
 const VIEW_CACHE = {};
 
 // === Linked navigation helpers ===
@@ -239,6 +240,301 @@ function renderLoadError(c, error) {
   c.innerHTML = `<div class="card fade-in" style="border-left:3px solid var(--red)"><div class="card-title">加载失败</div><div class="card-desc">${error?.message || 'unknown error'}</div></div>`;
 }
 
+const PANORAMA_ENTITY_META = {
+  domain: { label: '业务域', path: '/api/v1/panorama/domains' },
+  system: { label: '系统', path: '/api/v1/panorama/systems' },
+  subsystem: { label: '子系统', path: '/api/v1/panorama/subsystems' },
+  application: { label: '应用', path: '/api/v1/panorama/applications' }
+};
+
+function getPanoramaAdminData() {
+  const state = VIEW_CACHE.panoramaAdminData;
+  if (state?.status === 'ready' && state.data) return state.data;
+  return { domains: [], systems: [], subsystems: [], applications: [] };
+}
+
+function fetchPanoramaAdminData() {
+  return Promise.all([
+    apiRequest('/api/v1/panorama/domains'),
+    apiRequest('/api/v1/panorama/systems'),
+    apiRequest('/api/v1/panorama/subsystems'),
+    apiRequest('/api/v1/panorama/applications')
+  ]).then(([domains, systems, subsystems, applications]) => ({
+    domains: domains || [],
+    systems: systems || [],
+    subsystems: subsystems || [],
+    applications: applications || []
+  }));
+}
+
+function clearPanoramaViewCaches() {
+  Object.keys(VIEW_CACHE).forEach((key) => {
+    if (key === 'panoramaAdminData' || key === 'v1Domains' || key === 'v2Graph' || key.startsWith('v1-')) {
+      delete VIEW_CACHE[key];
+    }
+  });
+  MOCK.systems = {};
+  MOCK.subsystems = {};
+  MOCK.apps = {};
+}
+
+async function reloadPanoramaAdminDataAndRender() {
+  clearPanoramaViewCaches();
+  await ensureViewData('panoramaAdminData', fetchPanoramaAdminData);
+  if (currentView === 'panoramaAdmin' || currentView === 'v1') render();
+}
+
+function promptJsonInput(title, initialObj) {
+  const text = prompt(title, JSON.stringify(initialObj, null, 2));
+  if (text == null) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    alert('JSON格式错误');
+    return null;
+  }
+}
+
+function defaultPanoramaEntityTemplate(entityType) {
+  const data = getPanoramaAdminData();
+  const today = new Date().toISOString().slice(0, 10);
+  if (entityType === 'domain') {
+    return {
+      id: `dom-${Date.now()}`,
+      name: '新业务域',
+      code: 'DOM-NEW',
+      owner: '待定',
+      architect: '待定',
+      status: 'ACTIVE',
+      createdDate: today,
+      lastReviewDate: today,
+      compliance: 0,
+      health: 'good',
+      priority: 'P1',
+      color: '#6366f1',
+      description: '',
+      bizGoal: ''
+    };
+  }
+  if (entityType === 'system') {
+    return {
+      id: `sys-${Date.now()}`,
+      domainId: data.domains[0]?.id || '',
+      name: '新系统',
+      code: 'SYS-NEW',
+      level: 'GENERAL',
+      status: 'BUILDING',
+      owner: '待定',
+      architect: '待定',
+      team: '待定',
+      teamSize: 0,
+      techStack: '',
+      createdDate: today,
+      lastDeployDate: today,
+      deployMode: '',
+      dataCenters: '',
+      tags: []
+    };
+  }
+  if (entityType === 'subsystem') {
+    return {
+      id: `sub-${Date.now()}`,
+      systemId: data.systems[0]?.id || '',
+      name: '新子系统',
+      code: 'SUB-NEW',
+      status: 'BUILDING',
+      owner: '待定',
+      team: '待定',
+      techStack: '',
+      createdDate: today,
+      tags: []
+    };
+  }
+  return {
+    id: `app-${Date.now()}`,
+    subsystemId: data.subsystems[0]?.id || '',
+    name: '新应用',
+    type: 'MICROSERVICE',
+    status: 'BUILDING',
+    owner: '待定',
+    gitRepo: '',
+    tags: []
+  };
+}
+
+function findPanoramaEntity(entityType, id) {
+  const data = getPanoramaAdminData();
+  if (entityType === 'domain') return data.domains.find((x) => x.id === id);
+  if (entityType === 'system') return data.systems.find((x) => x.id === id);
+  if (entityType === 'subsystem') return data.subsystems.find((x) => x.id === id);
+  return data.applications.find((x) => x.id === id);
+}
+
+async function createPanoramaEntityPrompt(entityType) {
+  const meta = PANORAMA_ENTITY_META[entityType];
+  if (!meta) return;
+  const payload = promptJsonInput(`请输入要新增${meta.label}的JSON`, defaultPanoramaEntityTemplate(entityType));
+  if (!payload) return;
+  try {
+    await apiRequest(meta.path, { method: 'POST', body: JSON.stringify(payload) });
+    await reloadPanoramaAdminDataAndRender();
+  } catch (error) {
+    alert(`新增${meta.label}失败：${error.message}`);
+  }
+}
+
+async function editPanoramaEntityPrompt(entityType, entityId) {
+  const meta = PANORAMA_ENTITY_META[entityType];
+  if (!meta) return;
+  const current = findPanoramaEntity(entityType, entityId);
+  if (!current) {
+    alert(`${meta.label}不存在`);
+    return;
+  }
+  const payload = promptJsonInput(`请输入要更新${meta.label} ${entityId} 的JSON`, current);
+  if (!payload) return;
+  try {
+    await apiRequest(`${meta.path}/${encodeURIComponent(entityId)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload)
+    });
+    await reloadPanoramaAdminDataAndRender();
+  } catch (error) {
+    alert(`更新${meta.label}失败：${error.message}`);
+  }
+}
+
+async function deletePanoramaEntity(entityType, entityId) {
+  const meta = PANORAMA_ENTITY_META[entityType];
+  if (!meta) return;
+  if (!confirm(`确认删除${meta.label} ${entityId} 吗？`)) return;
+  const url = (entityType === 'domain' || entityType === 'system' || entityType === 'subsystem')
+    ? `${meta.path}/${encodeURIComponent(entityId)}?cascade=true`
+    : `${meta.path}/${encodeURIComponent(entityId)}`;
+  try {
+    await apiRequest(url, { method: 'DELETE' });
+    await reloadPanoramaAdminDataAndRender();
+  } catch (error) {
+    alert(`删除${meta.label}失败：${error.message}`);
+  }
+}
+
+function renderPanoramaAdminRows(entityType, data) {
+  if (entityType === 'domain') {
+    return (data.domains || []).map((d) => `<tr>
+      <td><strong>${d.id}</strong></td>
+      <td>${d.name}</td>
+      <td>${d.priority || '-'}</td>
+      <td>${d.status || '-'}</td>
+      <td>${d.systems || 0}</td>
+      <td>${d.apps || 0}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-outline" style="padding:4px 8px" onclick="editPanoramaEntityPrompt('domain','${d.id}')">编辑</button>
+        <button class="btn btn-outline" style="padding:4px 8px;color:var(--red)" onclick="deletePanoramaEntity('domain','${d.id}')">删除</button>
+      </td>
+    </tr>`).join('');
+  }
+  if (entityType === 'system') {
+    return (data.systems || []).map((s) => `<tr>
+      <td><strong>${s.id}</strong></td>
+      <td>${s.name}</td>
+      <td>${s.domainName || s.domainId || '-'}</td>
+      <td>${s.level || '-'}</td>
+      <td>${s.status || '-'}</td>
+      <td>${s.subsystems || 0}</td>
+      <td>${s.apps || 0}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-outline" style="padding:4px 8px" onclick="editPanoramaEntityPrompt('system','${s.id}')">编辑</button>
+        <button class="btn btn-outline" style="padding:4px 8px;color:var(--red)" onclick="deletePanoramaEntity('system','${s.id}')">删除</button>
+      </td>
+    </tr>`).join('');
+  }
+  if (entityType === 'subsystem') {
+    return (data.subsystems || []).map((s) => `<tr>
+      <td><strong>${s.id}</strong></td>
+      <td>${s.name}</td>
+      <td>${s.systemName || s.systemId || '-'}</td>
+      <td>${s.status || '-'}</td>
+      <td>${s.apps || 0}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-outline" style="padding:4px 8px" onclick="editPanoramaEntityPrompt('subsystem','${s.id}')">编辑</button>
+        <button class="btn btn-outline" style="padding:4px 8px;color:var(--red)" onclick="deletePanoramaEntity('subsystem','${s.id}')">删除</button>
+      </td>
+    </tr>`).join('');
+  }
+  return (data.applications || []).map((a) => `<tr>
+    <td><strong>${a.id}</strong></td>
+    <td>${a.name}</td>
+    <td>${a.subsystemName || a.subsystemId || '-'}</td>
+    <td>${a.type || '-'}</td>
+    <td>${a.status || '-'}</td>
+    <td>${a.owner || '-'}</td>
+    <td style="white-space:nowrap">
+      <button class="btn btn-outline" style="padding:4px 8px" onclick="editPanoramaEntityPrompt('application','${a.id}')">编辑</button>
+      <button class="btn btn-outline" style="padding:4px 8px;color:var(--red)" onclick="deletePanoramaEntity('application','${a.id}')">删除</button>
+    </td>
+  </tr>`).join('');
+}
+
+function renderPanoramaAdmin(c, b) {
+  b.innerHTML = '<span onclick="switchView(\'v1\')">全景图</span> &gt; 实体维护';
+  const state = VIEW_CACHE.panoramaAdminData;
+  if (!state) {
+    renderLoading(c, '实体维护加载中', '正在获取全景实体...');
+    ensureViewData('panoramaAdminData', fetchPanoramaAdminData)
+      .then(() => {
+        if (currentView === 'panoramaAdmin') render();
+      })
+      .catch(() => {
+        if (currentView === 'panoramaAdmin') render();
+      });
+    return;
+  }
+  if (state.status === 'loading') {
+    renderLoading(c, '实体维护加载中', '正在获取全景实体...');
+    return;
+  }
+  if (state.status === 'error') {
+    renderLoadError(c, state.error);
+    return;
+  }
+
+  const data = state.data || { domains: [], systems: [], subsystems: [], applications: [] };
+  const tabs = [
+    { key: 'domain', label: `业务域 (${data.domains.length})` },
+    { key: 'system', label: `系统 (${data.systems.length})` },
+    { key: 'subsystem', label: `子系统 (${data.subsystems.length})` },
+    { key: 'application', label: `应用 (${data.applications.length})` }
+  ];
+  const tableHeader = panoramaAdminEntity === 'domain'
+    ? '<tr><th>ID</th><th>名称</th><th>优先级</th><th>状态</th><th>系统数</th><th>应用数</th><th>操作</th></tr>'
+    : panoramaAdminEntity === 'system'
+      ? '<tr><th>ID</th><th>名称</th><th>所属业务域</th><th>分级</th><th>状态</th><th>子系统数</th><th>应用数</th><th>操作</th></tr>'
+      : panoramaAdminEntity === 'subsystem'
+        ? '<tr><th>ID</th><th>名称</th><th>所属系统</th><th>状态</th><th>应用数</th><th>操作</th></tr>'
+        : '<tr><th>ID</th><th>名称</th><th>所属子系统</th><th>类型</th><th>状态</th><th>负责人</th><th>操作</th></tr>';
+
+  c.innerHTML = `
+    <div class="stats-row fade-in">
+      <div class="stat-card"><div class="label">业务域</div><div class="value">${data.domains.length}</div></div>
+      <div class="stat-card"><div class="label">系统</div><div class="value" style="color:var(--cyan)">${data.systems.length}</div></div>
+      <div class="stat-card"><div class="label">子系统</div><div class="value">${data.subsystems.length}</div></div>
+      <div class="stat-card"><div class="label">应用</div><div class="value" style="color:var(--accent2)">${data.applications.length}</div></div>
+    </div>
+    <div class="cluster-tabs fade-in" style="margin-top:14px">
+      ${tabs.map((t) => `<div class="cluster-tab ${panoramaAdminEntity === t.key ? 'active' : ''}" onclick="panoramaAdminEntity='${t.key}';render()">${t.label}</div>`).join('')}
+    </div>
+    <div class="fade-in" style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0 12px">
+      <button class="btn btn-primary" onclick="createPanoramaEntityPrompt('${panoramaAdminEntity}')">+ 新增${PANORAMA_ENTITY_META[panoramaAdminEntity].label}</button>
+      <button class="btn btn-outline" onclick="reloadPanoramaAdminDataAndRender()">↻ 刷新</button>
+    </div>
+    <table class="review-table fade-in">
+      <thead>${tableHeader}</thead>
+      <tbody>${renderPanoramaAdminRows(panoramaAdminEntity, data)}</tbody>
+    </table>
+  `;
+}
+
 function switchView(view) {
   currentView = view;
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
@@ -252,7 +548,7 @@ function render() {
   const c = document.getElementById('content');
   const b = document.getElementById('breadcrumb');
   c.innerHTML = '';
-  const renderers = { v1: renderV1, v2: renderV2, v3: renderV3, v4: renderV4, v5: renderV5, v6: renderV6, v7: renderV7, v8: renderV8, standards: renderStandards, review: renderReview, dashboard: renderDashboard };
+  const renderers = { v1: renderV1, v2: renderV2, v3: renderV3, v4: renderV4, v5: renderV5, v6: renderV6, v7: renderV7, v8: renderV8, standards: renderStandards, panoramaAdmin: renderPanoramaAdmin, review: renderReview, dashboard: renderDashboard };
   if (renderers[currentView]) renderers[currentView](c, b);
 }
 

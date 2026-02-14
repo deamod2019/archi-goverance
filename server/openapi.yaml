@@ -57,6 +57,202 @@ paths:
           schema: { type: string, description: Comma-separated field projection paths }
       responses:
         '200': { description: Domain list }
+    post:
+      summary: Create panorama domain
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created domain }
+
+  /api/v1/panorama/domains/{id}:
+    put:
+      summary: Update panorama domain
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated domain }
+    delete:
+      summary: Delete panorama domain
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: cascade
+          schema: { type: boolean }
+      responses:
+        '200': { description: Delete result }
+
+  /api/v1/panorama/systems:
+    get:
+      summary: List panorama systems
+      parameters:
+        - in: query
+          name: domain_id
+          schema: { type: string }
+        - in: query
+          name: level
+          schema: { type: string }
+        - in: query
+          name: status
+          schema: { type: string }
+        - in: query
+          name: projection
+          schema: { type: string, enum: [full, summary, governance] }
+        - in: query
+          name: fields
+          schema: { type: string, description: Comma-separated field projection paths }
+      responses:
+        '200': { description: System list }
+    post:
+      summary: Create panorama system
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created system }
+
+  /api/v1/panorama/systems/{id}:
+    put:
+      summary: Update panorama system
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated system }
+    delete:
+      summary: Delete panorama system
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: cascade
+          schema: { type: boolean }
+      responses:
+        '200': { description: Delete result }
+
+  /api/v1/panorama/subsystems:
+    get:
+      summary: List panorama subsystems
+      parameters:
+        - in: query
+          name: system_id
+          schema: { type: string }
+        - in: query
+          name: domain_id
+          schema: { type: string }
+      responses:
+        '200': { description: Subsystem list }
+    post:
+      summary: Create panorama subsystem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created subsystem }
+
+  /api/v1/panorama/subsystems/{id}:
+    put:
+      summary: Update panorama subsystem
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated subsystem }
+    delete:
+      summary: Delete panorama subsystem
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: cascade
+          schema: { type: boolean }
+      responses:
+        '200': { description: Delete result }
+
+  /api/v1/panorama/applications:
+    get:
+      summary: List panorama applications
+      parameters:
+        - in: query
+          name: subsystem_id
+          schema: { type: string }
+        - in: query
+          name: system_id
+          schema: { type: string }
+        - in: query
+          name: domain_id
+          schema: { type: string }
+      responses:
+        '200': { description: Application list }
+    post:
+      summary: Create panorama application
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '201': { description: Created application }
+
+  /api/v1/panorama/applications/{id}:
+    put:
+      summary: Update panorama application
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Updated application }
+    delete:
+      summary: Delete panorama application
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Delete result }
 
   /api/v1/panorama/domains/{id}/systems:
     get:
