@@ -266,6 +266,91 @@ async function loadSectionsPayload() {
   return payload;
 }
 
+async function loadSectionPayload(section) {
+  const { rows } = await pool.query('SELECT payload FROM mock_sections WHERE section = $1', [section]);
+  if (!rows.length) {
+    throw new Error(`Section '${section}' not found in database`);
+  }
+  return rows[0].payload;
+}
+
+function splitDataCenters(text) {
+  return String(text || '')
+    .split(/[+,，、]/g)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function computeDrValidation(mock) {
+  const allSystems = Object.values(mock.systems || {}).flat();
+  const core = allSystems.filter((s) => s.level === 'CORE');
+  const important = allSystems.filter((s) => s.level === 'IMPORTANT');
+  const compliant = core.filter((s) => splitDataCenters(s.dataCenters).length >= 2);
+  const violations = core.filter((s) => splitDataCenters(s.dataCenters).length < 2);
+  const warnings = important.filter((s) => splitDataCenters(s.dataCenters).length < 2);
+
+  return {
+    summary: {
+      coreTotal: core.length,
+      coreCompliant: compliant.length,
+      coreRate: core.length ? Number(((compliant.length / core.length) * 100).toFixed(1)) : 100
+    },
+    compliant: compliant.map((s) => ({ systemId: s.id, systemName: s.name, dataCenters: splitDataCenters(s.dataCenters) })),
+    violations: violations.map((s) => ({ systemId: s.id, systemName: s.name, dataCenters: splitDataCenters(s.dataCenters) })),
+    warnings: warnings.map((s) => ({ systemId: s.id, systemName: s.name, dataCenters: splitDataCenters(s.dataCenters) }))
+  };
+}
+
+function pickNames(mock, count, offset = 0) {
+  const nodes = mock.depNodes || [];
+  if (!nodes.length) return [];
+  const out = [];
+  for (let i = 0; i < count; i += 1) {
+    const n = nodes[(offset + i) % nodes.length];
+    out.push(n.name);
+  }
+  return out;
+}
+
+function buildTrafficChain(domain) {
+  const d = domain || 'card-api.bank.com';
+  return {
+    domain: d,
+    vip: '10.1.1.100',
+    lbDevice: 'F5-PROD-01',
+    pool: 'card-api-pool',
+    backends: [
+      { endpoint: '10.2.1.11:8080', app: 'card-apply-svc', status: 'RUNNING' },
+      { endpoint: '10.2.1.12:8080', app: 'card-apply-svc', status: 'RUNNING' },
+      { endpoint: '10.2.1.13:8080', app: 'card-apply-svc', status: 'OFFLINE' }
+    ],
+    ssl: { valid: true, expireDate: '2027-03-15' }
+  };
+}
+
+function bfsNeighbors(startId, deps, depth, direction) {
+  const visited = new Set([startId]);
+  let frontier = [startId];
+  const output = [];
+  for (let level = 1; level <= depth; level += 1) {
+    const next = [];
+    for (const id of frontier) {
+      for (const dep of deps) {
+        const matched = direction === 'downstream' ? dep.source === id : dep.target === id;
+        if (!matched) continue;
+        const nid = direction === 'downstream' ? dep.target : dep.source;
+        if (visited.has(nid)) continue;
+        visited.add(nid);
+        next.push(nid);
+        output.push({ ...dep, level, nodeId: nid });
+      }
+    }
+    frontier = next;
+    if (!frontier.length) break;
+  }
+  return output;
+}
+
 function toReviewDto(row) {
   return {
     id: row.id,
@@ -461,6 +546,45 @@ async function handleApi(req, res, url) {
     return true;
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/dependency-graph') {
+    const mock = await loadSectionPayload('MOCK');
+    const domainId = url.searchParams.get('domain_id');
+    const focusApp = url.searchParams.get('app_id');
+    const depth = Number.parseInt(url.searchParams.get('depth') || '0', 10);
+
+    let nodes = mock.depNodes || [];
+    let edges = mock.dependencies || [];
+    if (domainId) {
+      nodes = nodes.filter((n) => n.domain === domainId);
+      const allowed = new Set(nodes.map((n) => n.id));
+      edges = edges.filter((d) => allowed.has(d.source) && allowed.has(d.target));
+    }
+
+    if (focusApp && depth > 0) {
+      const down = bfsNeighbors(focusApp, edges, depth, 'downstream');
+      const up = bfsNeighbors(focusApp, edges, depth, 'upstream');
+      const keep = new Set([focusApp, ...down.map((x) => x.nodeId), ...up.map((x) => x.nodeId)]);
+      nodes = nodes.filter((n) => keep.has(n.id));
+      edges = edges.filter((e) => keep.has(e.source) && keep.has(e.target));
+    }
+
+    sendJson(res, 200, { nodes, edges });
+    return true;
+  }
+
+  const appImpactMatch = url.pathname.match(/^\/api\/v1\/panorama\/applications\/([^/]+)\/impact$/);
+  if (req.method === 'GET' && appImpactMatch) {
+    const appId = decodeURIComponent(appImpactMatch[1]);
+    const depth = Number.parseInt(url.searchParams.get('depth') || '3', 10);
+    const changeType = url.searchParams.get('change_type') || 'UNKNOWN';
+    const mock = await loadSectionPayload('MOCK');
+    const deps = mock.dependencies || [];
+    const upstream = bfsNeighbors(appId, deps, depth, 'upstream');
+    const downstream = bfsNeighbors(appId, deps, depth, 'downstream');
+    sendJson(res, 200, { appId, changeType, depth, upstream, downstream });
+    return true;
+  }
+
   const domainSystemsMatch = url.pathname.match(/^\/api\/v1\/panorama\/domains\/([^/]+)\/systems$/);
   if (req.method === 'GET' && domainSystemsMatch) {
     const domainId = decodeURIComponent(domainSystemsMatch[1]);
@@ -509,6 +633,152 @@ async function handleApi(req, res, url) {
 
     const depsRes = await pool.query('SELECT payload FROM dependencies WHERE source = $1 OR target = $1', [appId]);
     sendJson(res, 200, { profile: appRes.rows[0].payload, dependencies: depsRes.rows.map((row) => row.payload) });
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/data-centers/summary') {
+    const mock = await loadSectionPayload('MOCK');
+    sendJson(res, 200, mock.dataCenters || []);
+    return true;
+  }
+
+  const appDeployMatch = url.pathname.match(/^\/api\/v1\/panorama\/applications\/([^/]+)\/deployment-topology$/);
+  if (req.method === 'GET' && appDeployMatch) {
+    const appId = decodeURIComponent(appDeployMatch[1]);
+    const appRes = await pool.query(
+      `
+      SELECT a.payload AS app_payload, sy.payload AS system_payload
+      FROM applications a
+      JOIN subsystems ss ON ss.id = a.subsystem_id
+      JOIN systems sy ON sy.id = ss.system_id
+      WHERE a.id = $1
+      `,
+      [appId]
+    );
+    if (!appRes.rows.length) {
+      sendJson(res, 404, { error: 'not_found', message: 'application not found' });
+      return true;
+    }
+    const row = appRes.rows[0];
+    const dcs = splitDataCenters(row.system_payload.dataCenters);
+    const instances = dcs.map((dc, i) => ({ dc, count: i === 0 ? 2 : 1, status: 'RUNNING' }));
+    sendJson(res, 200, { app: row.app_payload, system: row.system_payload, dataCenters: dcs, instances });
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/dr-validation') {
+    const mock = await loadSectionPayload('MOCK');
+    sendJson(res, 200, computeDrValidation(mock));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/database-clusters') {
+    const mock = await loadSectionPayload('MOCK');
+    let clusters = mock.dbClusters || [];
+    const type = url.searchParams.get('type');
+    const dcId = url.searchParams.get('dc_id');
+    if (type) clusters = clusters.filter((c) => String(c.type).toUpperCase() === String(type).toUpperCase());
+    if (dcId) clusters = clusters.filter((c) => String(c.dc).includes(dcId));
+    sendJson(res, 200, clusters);
+    return true;
+  }
+
+  const dbDetailMatch = url.pathname.match(/^\/api\/v1\/panorama\/database-clusters\/([^/]+)\/detail$/);
+  if (req.method === 'GET' && dbDetailMatch) {
+    const clusterId = decodeURIComponent(dbDetailMatch[1]);
+    const mock = await loadSectionPayload('MOCK');
+    const cluster = (mock.dbClusters || []).find((c) => c.id === clusterId);
+    if (!cluster) {
+      sendJson(res, 404, { error: 'not_found', message: 'database cluster not found' });
+      return true;
+    }
+    const instances = Array.from({ length: cluster.instances }).map((_, i) => ({
+      instanceName: `${cluster.name}-node-${String(i + 1).padStart(2, '0')}`,
+      endpoint: `10.2.${Math.floor(i / 10) + 1}.${10 + i}:33${String(i).padStart(2, '0')}`,
+      role: i === 0 ? 'PRIMARY' : 'REPLICA',
+      status: 'RUNNING'
+    }));
+    const appRelations = pickNames(mock, cluster.apps).map((name) => ({ appName: name, accessType: 'READ_WRITE', schema: 'default' }));
+    const drConfig = cluster.dr === 'ok'
+      ? { status: 'NORMAL', mode: 'SYNC', rpoSeconds: 0, rtoSeconds: 60 }
+      : cluster.dr === 'warn'
+        ? { status: 'LAG', mode: 'ASYNC', rpoSeconds: 60, rtoSeconds: 300 }
+        : { status: 'MISSING', mode: null, rpoSeconds: null, rtoSeconds: null };
+    sendJson(res, 200, { cluster, instances, appRelations, drConfig });
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/middleware-clusters') {
+    const mock = await loadSectionPayload('MOCK');
+    const type = url.searchParams.get('type');
+    let clusters = [];
+    if (type) {
+      clusters = (mock.mwClusters?.[type] || []).map((c) => ({ ...c, type }));
+    } else {
+      for (const [k, arr] of Object.entries(mock.mwClusters || {})) {
+        clusters.push(...arr.map((c) => ({ ...c, type: k })));
+      }
+    }
+    sendJson(res, 200, clusters);
+    return true;
+  }
+
+  const mwImpactMatch = url.pathname.match(/^\/api\/v1\/panorama\/middleware-clusters\/([^/]+)\/impact$/);
+  if (req.method === 'GET' && mwImpactMatch) {
+    const clusterId = decodeURIComponent(mwImpactMatch[1]);
+    const mock = await loadSectionPayload('MOCK');
+    let cluster = null;
+    for (const [type, arr] of Object.entries(mock.mwClusters || {})) {
+      const hit = arr.find((c) => c.id === clusterId);
+      if (hit) {
+        cluster = { ...hit, type };
+        break;
+      }
+    }
+    if (!cluster) {
+      sendJson(res, 404, { error: 'not_found', message: 'middleware cluster not found' });
+      return true;
+    }
+    const producers = pickNames(mock, cluster.producers, 1);
+    const consumers = pickNames(mock, cluster.consumers, 11);
+    sendJson(res, 200, { cluster, producers, consumers });
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/traffic-chain') {
+    const domain = url.searchParams.get('domain') || 'card-api.bank.com';
+    sendJson(res, 200, buildTrafficChain(domain));
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/tech-radar') {
+    const mock = await loadSectionPayload('MOCK');
+    const standards = mock.techStandards || [];
+    sendJson(res, 200, {
+      adopt: standards.filter((t) => t.lifecycle === 'RECOMMENDED'),
+      trial: standards.filter((t) => t.lifecycle === 'ALLOWED'),
+      hold: standards.filter((t) => t.lifecycle === 'DEPRECATED'),
+      forbid: standards.filter((t) => t.lifecycle === 'FORBIDDEN')
+    });
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/tech-debt') {
+    const mock = await loadSectionPayload('MOCK');
+    const debt = (mock.techStandards || []).filter((t) => ['DEPRECATED', 'FORBIDDEN'].includes(t.lifecycle));
+    sendJson(res, 200, debt);
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/panorama/drift-detection') {
+    const mock = await loadSectionPayload('MOCK');
+    sendJson(res, 200, mock.driftData || {});
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/compliance-rules') {
+    const { rows } = await pool.query('SELECT rule_id, payload FROM compliance_rules ORDER BY rule_id');
+    sendJson(res, 200, rows.map((r) => ({ ruleId: r.rule_id, ...r.payload })));
     return true;
   }
 
@@ -649,6 +919,24 @@ async function handleApi(req, res, url) {
       approved: approved.rows[0].n,
       rejected: rejected.rows[0].n,
       passRate
+    });
+    return true;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/v1/reviews/dashboard/my-workbench') {
+    const user = url.searchParams.get('user') || '';
+    const [mine, pending] = await Promise.all([
+      user
+        ? pool.query('SELECT COUNT(*)::int AS n FROM reviews WHERE applicant = $1', [user])
+        : pool.query('SELECT COUNT(*)::int AS n FROM reviews'),
+      user
+        ? pool.query("SELECT COUNT(*)::int AS n FROM reviews WHERE applicant = $1 AND status IN ('REVIEWING','DRAFT')", [user])
+        : pool.query("SELECT COUNT(*)::int AS n FROM reviews WHERE status IN ('REVIEWING','DRAFT')")
+    ]);
+    sendJson(res, 200, {
+      user: user || null,
+      submitted: mine.rows[0].n,
+      pending: pending.rows[0].n
     });
     return true;
   }

@@ -2,6 +2,7 @@
 let currentView = 'v1';
 let v1Level = 0; // 0=treemap, 1=domain, 2=system, 3=subsystem, 4=profile
 let v1Domain = null, v1System = null, v1Subsystem = null, v1App = null;
+const VIEW_CACHE = {};
 
 // === Linked navigation helpers ===
 function personLink(name) {
@@ -78,6 +79,31 @@ async function apiRequest(url, options = {}) {
   return response.json();
 }
 
+function ensureViewData(key, fetcher) {
+  const cached = VIEW_CACHE[key];
+  if (cached?.status === 'ready') return Promise.resolve(cached.data);
+  if (cached?.status === 'loading') return cached.promise;
+  const promise = fetcher()
+    .then((data) => {
+      VIEW_CACHE[key] = { status: 'ready', data };
+      return data;
+    })
+    .catch((error) => {
+      VIEW_CACHE[key] = { status: 'error', error };
+      throw error;
+    });
+  VIEW_CACHE[key] = { status: 'loading', promise };
+  return promise;
+}
+
+function renderLoading(c, title = '加载中', desc = '正在获取数据...') {
+  c.innerHTML = `<div class="card fade-in"><div class="card-title">${title}</div><div class="card-desc">${desc}</div></div>`;
+}
+
+function renderLoadError(c, error) {
+  c.innerHTML = `<div class="card fade-in" style="border-left:3px solid var(--red)"><div class="card-title">加载失败</div><div class="card-desc">${error?.message || 'unknown error'}</div></div>`;
+}
+
 function switchView(view) {
   currentView = view;
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
@@ -106,6 +132,29 @@ function renderV1(c, b) {
 
 function renderV1Treemap(c, b) {
   b.innerHTML = '<span onclick="switchView(\'v1\')">全景图</span> &gt; 业务能力视角';
+  const state = VIEW_CACHE.v1Domains;
+  if (!state) {
+    renderLoading(c, '业务域加载中', '正在获取业务能力视角数据...');
+    ensureViewData('v1Domains', () => apiRequest('/api/v1/panorama/domains'))
+      .then((domains) => {
+        MOCK.domains = domains;
+        if (currentView === 'v1' && v1Level === 0) render();
+      })
+      .catch(() => {
+        if (currentView === 'v1' && v1Level === 0) render();
+      });
+    return;
+  }
+  if (state.status === 'loading') {
+    renderLoading(c, '业务域加载中', '正在获取业务能力视角数据...');
+    return;
+  }
+  if (state.status === 'error') {
+    renderLoadError(c, state.error);
+    return;
+  }
+  MOCK.domains = state.data;
+
   const total = MOCK.domains.reduce((s, d) => s + d.apps, 0);
   const totalSys = MOCK.domains.reduce((s, d) => s + (MOCK.systems[d.id] || []).length, 0);
   const stats = `<div class="stats-row fade-in">
@@ -135,8 +184,17 @@ function renderV1Treemap(c, b) {
   c.innerHTML = stats + `<div class="treemap-container fade-in">${cells}</div>`;
 }
 
-function drillDomain(domainId) {
+async function drillDomain(domainId) {
   v1Domain = MOCK.domains.find(d => d.id === domainId);
+  if (!v1Domain) return;
+  if (!MOCK.systems[domainId]) {
+    try {
+      MOCK.systems[domainId] = await apiRequest(`/api/v1/panorama/domains/${encodeURIComponent(domainId)}/systems`);
+    } catch (error) {
+      alert(`加载系统列表失败：${error.message}`);
+      return;
+    }
+  }
   v1Level = 1;
   render();
 }
@@ -203,6 +261,31 @@ function drillSystem(sysId) {
 function renderV1System(c, b) {
   b.innerHTML = `<span onclick="switchView('v1')">全景图</span> &gt; <span onclick="v1Level=0;render()">业务能力</span> &gt; <span onclick="v1Level=1;render()">${v1Domain.name}</span> &gt; ${v1System.name}`;
   const s = v1System;
+  const cacheKey = `v1-system-${s.id}`;
+  const state = VIEW_CACHE[cacheKey];
+  if (!state && !MOCK.subsystems[s.id]) {
+    renderLoading(c, '系统架构加载中', `正在获取 ${s.name} 架构...`);
+    ensureViewData(cacheKey, () => apiRequest(`/api/v1/panorama/systems/${encodeURIComponent(s.id)}/architecture`))
+      .then((data) => {
+        MOCK.subsystems[s.id] = data.subsystems || [];
+        (data.subsystems || []).forEach((sub) => {
+          MOCK.apps[sub.id] = sub.applications || [];
+        });
+        if (currentView === 'v1' && v1Level === 2 && v1System?.id === s.id) render();
+      })
+      .catch(() => {
+        if (currentView === 'v1' && v1Level === 2 && v1System?.id === s.id) render();
+      });
+    return;
+  }
+  if (state?.status === 'loading' && !MOCK.subsystems[s.id]) {
+    renderLoading(c, '系统架构加载中', `正在获取 ${s.name} 架构...`);
+    return;
+  }
+  if (state?.status === 'error' && !MOCK.subsystems[s.id]) {
+    renderLoadError(c, state.error);
+    return;
+  }
   const subsystems = MOCK.subsystems[s.id] || generateSubsystems(s);
 
   // System profile section
@@ -378,6 +461,31 @@ function renderV1Profile(c, b) {
 // ========== V2: Dependency Graph ==========
 function renderV2(c, b) {
   b.innerHTML = '<span onclick="switchView(\'v1\')">全景图</span> &gt; 应用依赖视角';
+  const state = VIEW_CACHE.v2Graph;
+  if (!state) {
+    renderLoading(c, '依赖图加载中', '正在获取应用依赖关系...');
+    ensureViewData('v2Graph', () => apiRequest('/api/v1/panorama/dependency-graph'))
+      .then((data) => {
+        MOCK.depNodes = data.nodes || [];
+        MOCK.dependencies = data.edges || [];
+        if (currentView === 'v2') render();
+      })
+      .catch(() => {
+        if (currentView === 'v2') render();
+      });
+    return;
+  }
+  if (state.status === 'loading') {
+    renderLoading(c, '依赖图加载中', '正在获取应用依赖关系...');
+    return;
+  }
+  if (state.status === 'error') {
+    renderLoadError(c, state.error);
+    return;
+  }
+  MOCK.depNodes = state.data.nodes || [];
+  MOCK.dependencies = state.data.edges || [];
+
   c.innerHTML = `<div class="graph-container fade-in" id="graphBox">
     <div class="graph-controls">
       <button class="active" onclick="setDepthFilter(0)">全部</button>
@@ -494,6 +602,34 @@ function highlightDBShare() {
 // ========== V3: Deployment Topology ==========
 function renderV3(c, b) {
   b.innerHTML = '<span onclick="switchView(\'v1\')">全景图</span> &gt; 部署拓扑视角';
+  const state = VIEW_CACHE.v3Topology;
+  if (!state) {
+    renderLoading(c, '部署拓扑加载中', '正在获取数据中心与容灾校验数据...');
+    ensureViewData('v3Topology', () =>
+      Promise.all([
+        apiRequest('/api/v1/panorama/data-centers/summary'),
+        apiRequest('/api/v1/panorama/dr-validation')
+      ]).then(([dataCenters, drValidation]) => ({ dataCenters, drValidation }))
+    )
+      .then((data) => {
+        MOCK.dataCenters = data.dataCenters || [];
+        if (currentView === 'v3') render();
+      })
+      .catch(() => {
+        if (currentView === 'v3') render();
+      });
+    return;
+  }
+  if (state.status === 'loading') {
+    renderLoading(c, '部署拓扑加载中', '正在获取数据中心与容灾校验数据...');
+    return;
+  }
+  if (state.status === 'error') {
+    renderLoadError(c, state.error);
+    return;
+  }
+  const dr = state.data.drValidation || { summary: { coreCompliant: 0, coreTotal: 0, coreRate: 0 }, compliant: [], violations: [], warnings: [] };
+
   let html = '<div class="stats-row fade-in">';
   MOCK.dataCenters.forEach(dc => {
     html += `<div class="stat-card" style="cursor:pointer" onclick="alert('钻取到${dc.name}详情')"><div class="label">${dc.name}</div><div class="value">${dc.apps}</div><div class="sub">应用 ${dc.vms}VM ${dc.containers}容器</div>
@@ -501,15 +637,38 @@ function renderV3(c, b) {
       <div class="sub">${dc.usage}% 资源利用率</div></div>`;
   });
   html += '</div><h3 style="margin:16px 0 12px;font-size:15px" class="fade-in">灾备验证</h3><div class="cards-grid fade-in">';
-  html += `<div class="card" style="border-left:3px solid var(--green)"><div class="card-title">✅ 合规</div><div class="card-stats"><span>核心系统双DC部署达标：12/14 (85.7%)</span></div></div>`;
-  html += `<div class="card" style="border-left:3px solid var(--red)"><div class="card-title">❌ 违规</div><div class="card-stats"><span>核心银行批量 - 仅在新数据中心</span></div><div class="card-stats"><span>支付对账 - 仅在新数据中心</span></div></div>`;
-  html += `<div class="card" style="border-left:3px solid var(--yellow)"><div class="card-title">⚠️ 警告</div><div class="card-stats"><span>CRM报表服务 - IMPORTANT级仅单DC</span></div></div>`;
+  html += `<div class="card" style="border-left:3px solid var(--green)"><div class="card-title">✅ 合规</div><div class="card-stats"><span>核心系统双DC部署达标：${dr.summary.coreCompliant}/${dr.summary.coreTotal} (${dr.summary.coreRate}%)</span></div></div>`;
+  html += `<div class="card" style="border-left:3px solid var(--red)"><div class="card-title">❌ 违规</div>${(dr.violations || []).slice(0, 3).map(v => `<div class="card-stats"><span>${v.systemName} - 单DC部署</span></div>`).join('') || '<div class="card-stats"><span>无</span></div>'}</div>`;
+  html += `<div class="card" style="border-left:3px solid var(--yellow)"><div class="card-title">⚠️ 警告</div>${(dr.warnings || []).slice(0, 3).map(v => `<div class="card-stats"><span>${v.systemName} - IMPORTANT级建议双DC</span></div>`).join('') || '<div class="card-stats"><span>无</span></div>'}</div>`;
   c.innerHTML = html + '</div>';
 }
 
 // ========== V4: Database ==========
 function renderV4(c, b) {
   b.innerHTML = '<span onclick="switchView(\'v1\')">全景图</span> &gt; 数据库视角';
+  const state = VIEW_CACHE.v4Db;
+  if (!state) {
+    renderLoading(c, '数据库视角加载中', '正在获取数据库集群数据...');
+    ensureViewData('v4Db', () => apiRequest('/api/v1/panorama/database-clusters'))
+      .then((clusters) => {
+        MOCK.dbClusters = clusters || [];
+        if (currentView === 'v4') render();
+      })
+      .catch(() => {
+        if (currentView === 'v4') render();
+      });
+    return;
+  }
+  if (state.status === 'loading') {
+    renderLoading(c, '数据库视角加载中', '正在获取数据库集群数据...');
+    return;
+  }
+  if (state.status === 'error') {
+    renderLoadError(c, state.error);
+    return;
+  }
+  MOCK.dbClusters = state.data || [];
+
   const types = [...new Set(MOCK.dbClusters.map(d => d.type))];
   let html = '<div class="cluster-tabs fade-in">';
   types.forEach((t, i) => html += `<div class="cluster-tab ${i === 0 ? 'active' : ''}" onclick="filterDB('${t}',this)">${t}</div>`);
@@ -537,6 +696,39 @@ function filterDB(type, el) {
 // ========== V5: Middleware ==========
 function renderV5(c, b) {
   b.innerHTML = '<span onclick="switchView(\'v1\')">全景图</span> &gt; 中间件视角';
+  const state = VIEW_CACHE.v5Mw;
+  if (!state) {
+    renderLoading(c, '中间件视角加载中', '正在获取中间件集群数据...');
+    ensureViewData('v5Mw', () => apiRequest('/api/v1/panorama/middleware-clusters'))
+      .then((list) => {
+        const grouped = {};
+        (list || []).forEach((item) => {
+          if (!grouped[item.type]) grouped[item.type] = [];
+          grouped[item.type].push(item);
+        });
+        MOCK.mwClusters = grouped;
+        if (currentView === 'v5') render();
+      })
+      .catch(() => {
+        if (currentView === 'v5') render();
+      });
+    return;
+  }
+  if (state.status === 'loading') {
+    renderLoading(c, '中间件视角加载中', '正在获取中间件集群数据...');
+    return;
+  }
+  if (state.status === 'error') {
+    renderLoadError(c, state.error);
+    return;
+  }
+  const grouped = {};
+  (state.data || []).forEach((item) => {
+    if (!grouped[item.type]) grouped[item.type] = [];
+    grouped[item.type].push(item);
+  });
+  MOCK.mwClusters = grouped;
+
   const types = Object.keys(MOCK.mwClusters);
   let html = '<div class="cluster-tabs fade-in">';
   types.forEach((t, i) => html += `<div class="cluster-tab ${i === 0 ? 'active' : ''}" onclick="filterMW('${t}',this)">${t}</div>`);
@@ -574,33 +766,67 @@ function renderV6(c, b) {
   renderChain();
 }
 
-function renderChain() {
-  document.getElementById('chainResult').innerHTML = `
-    <h3 style="font-size:15px;margin-bottom:16px">链路追踪</h3>
-    <div class="chain">
-      <div class="chain-node" style="border-left:3px solid var(--cyan)">🌐 card-api.bank.com</div><div class="chain-arrow">→</div>
-      <div class="chain-node">VIP: 10.1.1.100</div><div class="chain-arrow">→</div>
-      <div class="chain-node" style="border-left:3px solid var(--yellow)">F5-PROD-01 (LB)</div><div class="chain-arrow">→</div>
-      <div class="chain-node" style="border-left:3px solid var(--accent)">Pool: card-api-pool</div>
-    </div>
-    <div class="chain-members">
-      <div class="chain-member"><span class="tag tag-running">●</span>10.2.1.11:8080 → card-apply-svc (运行中)</div>
-      <div class="chain-member"><span class="tag tag-running">●</span>10.2.1.12:8080 → card-apply-svc (运行中)</div>
-      <div class="chain-member"><span class="tag tag-core">●</span>10.2.1.13:8080 → card-apply-svc (已下线)</div>
-    </div>
-    <div style="margin-top:24px;padding:12px 16px;background:var(--bg3);border-radius:8px;border-left:3px solid var(--green)">
-      <div style="font-size:13px;color:var(--green)">✅ SSL证书有效</div>
-      <div style="font-size:12px;color:var(--text2);margin-top:4px">到期日：2027-03-15 (剩余395天)</div>
-    </div>`;
+async function renderChain() {
+  const box = document.getElementById('chainResult');
+  if (!box) return;
+  const domain = document.getElementById('chainSearch')?.value?.trim() || 'card-api.bank.com';
+  box.innerHTML = '<div class="card"><div class="card-title">查询中</div><div class="card-desc">正在解析流量链路...</div></div>';
+  try {
+    const chain = await apiRequest(`/api/v1/panorama/traffic-chain?domain=${encodeURIComponent(domain)}`);
+    box.innerHTML = `
+      <h3 style="font-size:15px;margin-bottom:16px">链路追踪</h3>
+      <div class="chain">
+        <div class="chain-node" style="border-left:3px solid var(--cyan)">🌐 ${chain.domain}</div><div class="chain-arrow">→</div>
+        <div class="chain-node">VIP: ${chain.vip}</div><div class="chain-arrow">→</div>
+        <div class="chain-node" style="border-left:3px solid var(--yellow)">${chain.lbDevice} (LB)</div><div class="chain-arrow">→</div>
+        <div class="chain-node" style="border-left:3px solid var(--accent)">Pool: ${chain.pool}</div>
+      </div>
+      <div class="chain-members">
+        ${(chain.backends || []).map(b => `<div class="chain-member"><span class="tag ${b.status === 'RUNNING' ? 'tag-running' : 'tag-core'}">●</span>${b.endpoint} → ${b.app} (${b.status === 'RUNNING' ? '运行中' : '已下线'})</div>`).join('')}
+      </div>
+      <div style="margin-top:24px;padding:12px 16px;background:var(--bg3);border-radius:8px;border-left:3px solid ${chain.ssl?.valid ? 'var(--green)' : 'var(--red)'}">
+        <div style="font-size:13px;color:${chain.ssl?.valid ? 'var(--green)' : 'var(--red)'}">${chain.ssl?.valid ? '✅ SSL证书有效' : '❌ SSL证书异常'}</div>
+        <div style="font-size:12px;color:var(--text2);margin-top:4px">到期日：${chain.ssl?.expireDate || '未知'}</div>
+      </div>`;
+  } catch (error) {
+    box.innerHTML = `<div class="card" style="border-left:3px solid var(--red)"><div class="card-title">查询失败</div><div class="card-desc">${error.message}</div></div>`;
+  }
 }
 
 // ========== V7: Tech Standards ==========
 function renderV7(c, b) {
   b.innerHTML = '<span onclick="switchView(\'v1\')">全景图</span> &gt; 技术标准视角';
-  const rec = MOCK.techStandards.filter(t => t.lifecycle === 'RECOMMENDED');
-  const allow = MOCK.techStandards.filter(t => t.lifecycle === 'ALLOWED');
-  const dep = MOCK.techStandards.filter(t => t.lifecycle === 'DEPRECATED');
-  const forb = MOCK.techStandards.filter(t => t.lifecycle === 'FORBIDDEN');
+  const state = VIEW_CACHE.v7Tech;
+  if (!state) {
+    renderLoading(c, '技术标准加载中', '正在获取技术雷达与技术债务...');
+    ensureViewData('v7Tech', () =>
+      Promise.all([
+        apiRequest('/api/v1/panorama/tech-radar'),
+        apiRequest('/api/v1/panorama/tech-debt')
+      ]).then(([radar, debt]) => ({ radar, debt }))
+    )
+      .then((data) => {
+        const merged = [...(data.radar.adopt || []), ...(data.radar.trial || []), ...(data.radar.hold || []), ...(data.radar.forbid || [])];
+        MOCK.techStandards = merged;
+        if (currentView === 'v7') render();
+      })
+      .catch(() => {
+        if (currentView === 'v7') render();
+      });
+    return;
+  }
+  if (state.status === 'loading') {
+    renderLoading(c, '技术标准加载中', '正在获取技术雷达与技术债务...');
+    return;
+  }
+  if (state.status === 'error') {
+    renderLoadError(c, state.error);
+    return;
+  }
+  const rec = state.data.radar.adopt || [];
+  const allow = state.data.radar.trial || [];
+  const dep = state.data.radar.hold || [];
+  const forb = state.data.radar.forbid || [];
 
   let radarHtml = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px" class="fade-in">';
   [{ label: '🟢 Adopt (推荐)', items: rec, color: 'var(--green)' }, { label: '🟡 Trial (允许)', items: allow, color: 'var(--yellow)' }, { label: '🟠 Hold (废弃)', items: dep, color: 'var(--yellow)' }, { label: '🔴 Forbid (禁止)', items: forb, color: 'var(--red)' }].forEach(g => {
@@ -621,7 +847,28 @@ function renderV7(c, b) {
 // ========== V8: Runtime Drift ==========
 function renderV8(c, b) {
   b.innerHTML = '<span onclick="switchView(\'v1\')">全景图</span> &gt; 运行态对比视角';
-  const d = MOCK.driftData;
+  const state = VIEW_CACHE.v8Drift;
+  if (!state) {
+    renderLoading(c, '运行态对比加载中', '正在获取运行态偏差数据...');
+    ensureViewData('v8Drift', () => apiRequest('/api/v1/panorama/drift-detection'))
+      .then((data) => {
+        MOCK.driftData = data;
+        if (currentView === 'v8') render();
+      })
+      .catch(() => {
+        if (currentView === 'v8') render();
+      });
+    return;
+  }
+  if (state.status === 'loading') {
+    renderLoading(c, '运行态对比加载中', '正在获取运行态偏差数据...');
+    return;
+  }
+  if (state.status === 'error') {
+    renderLoadError(c, state.error);
+    return;
+  }
+  const d = state.data;
   c.innerHTML = `<div class="drift-grid fade-in">
     <div class="drift-card" style="border-left:3px solid var(--red)"><h3>👻 影子应用</h3><div class="count" style="color:var(--red)">${d.shadow.length}</div>
       <ul class="drift-list">${d.shadow.map(s => `<li>${s.name} <span style="font-size:11px;color:var(--text2)">${s.calls}次调用</span> <button class="btn btn-primary">登记</button></li>`).join('')}</ul></div>

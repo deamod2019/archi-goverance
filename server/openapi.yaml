@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Aichi Governance API
-  version: 1.0.0
+  version: 1.1.0
 servers:
   - url: /
 paths:
@@ -9,20 +9,20 @@ paths:
     get:
       summary: Health check
       responses:
-        '200':
-          description: OK
+        '200': { description: OK }
+
   /api/v1/bootstrap:
     get:
       summary: Load full bootstrap payload for mockup-compatible frontend
       responses:
-        '200':
-          description: Bootstrap payload
+        '200': { description: Bootstrap payload }
+
   /api/v1/panorama/domains:
     get:
       summary: List panorama domains
       responses:
-        '200':
-          description: Domain list
+        '200': { description: Domain list }
+
   /api/v1/panorama/domains/{id}/systems:
     get:
       summary: List systems under a domain
@@ -30,11 +30,10 @@ paths:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
+          schema: { type: string }
       responses:
-        '200':
-          description: Systems list
+        '200': { description: Systems list }
+
   /api/v1/panorama/systems/{id}/architecture:
     get:
       summary: Get system architecture (subsystems and applications)
@@ -42,11 +41,10 @@ paths:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
+          schema: { type: string }
       responses:
-        '200':
-          description: Architecture payload
+        '200': { description: Architecture payload }
+
   /api/v1/panorama/applications/{id}/profile:
     get:
       summary: Get application profile and dependencies
@@ -54,22 +52,154 @@ paths:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
+          schema: { type: string }
       responses:
-        '200':
-          description: Application profile
+        '200': { description: Application profile }
+
+  /api/v1/panorama/dependency-graph:
+    get:
+      summary: Get dependency graph
+      parameters:
+        - in: query
+          name: domain_id
+          schema: { type: string }
+        - in: query
+          name: app_id
+          schema: { type: string }
+        - in: query
+          name: depth
+          schema: { type: integer }
+      responses:
+        '200': { description: Graph payload }
+
+  /api/v1/panorama/applications/{id}/impact:
+    get:
+      summary: Get impact analysis for application
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: change_type
+          schema: { type: string }
+        - in: query
+          name: depth
+          schema: { type: integer }
+      responses:
+        '200': { description: Impact payload }
+
+  /api/v1/panorama/data-centers/summary:
+    get:
+      summary: List data center summaries
+      responses:
+        '200': { description: Data center list }
+
+  /api/v1/panorama/applications/{id}/deployment-topology:
+    get:
+      summary: Get deployment topology of application
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Deployment topology payload }
+
+  /api/v1/panorama/dr-validation:
+    get:
+      summary: Get DR validation result
+      responses:
+        '200': { description: DR validation payload }
+
+  /api/v1/panorama/database-clusters:
+    get:
+      summary: List database clusters
+      parameters:
+        - in: query
+          name: type
+          schema: { type: string }
+        - in: query
+          name: dc_id
+          schema: { type: string }
+      responses:
+        '200': { description: Database clusters }
+
+  /api/v1/panorama/database-clusters/{id}/detail:
+    get:
+      summary: Get database cluster detail
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Database detail }
+
+  /api/v1/panorama/middleware-clusters:
+    get:
+      summary: List middleware clusters
+      parameters:
+        - in: query
+          name: type
+          schema: { type: string }
+      responses:
+        '200': { description: Middleware clusters }
+
+  /api/v1/panorama/middleware-clusters/{id}/impact:
+    get:
+      summary: Get middleware impact
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Middleware impact payload }
+
+  /api/v1/panorama/traffic-chain:
+    get:
+      summary: Get traffic chain by domain
+      parameters:
+        - in: query
+          name: domain
+          schema: { type: string }
+      responses:
+        '200': { description: Traffic chain payload }
+
+  /api/v1/panorama/tech-radar:
+    get:
+      summary: Get tech radar buckets
+      responses:
+        '200': { description: Tech radar payload }
+
+  /api/v1/panorama/tech-debt:
+    get:
+      summary: Get tech debt list
+      responses:
+        '200': { description: Tech debt payload }
+
+  /api/v1/panorama/drift-detection:
+    get:
+      summary: Get runtime drift detection result
+      responses:
+        '200': { description: Drift payload }
+
+  /api/v1/compliance-rules:
+    get:
+      summary: List compliance rules
+      responses:
+        '200': { description: Compliance rule list }
+
   /api/v1/reviews:
     get:
       summary: List reviews
       parameters:
         - in: query
           name: status
-          schema:
-            type: string
+          schema: { type: string }
       responses:
-        '200':
-          description: Review list
+        '200': { description: Review list }
     post:
       summary: Create review draft
       requestBody:
@@ -80,8 +210,8 @@ paths:
               type: object
               required: [title, type]
       responses:
-        '201':
-          description: Review created
+        '201': { description: Review created }
+
   /api/v1/reviews/{id}/submit:
     put:
       summary: Submit review and run compliance checks
@@ -89,11 +219,10 @@ paths:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
+          schema: { type: string }
       responses:
-        '200':
-          description: Submit result
+        '200': { description: Submit result }
+
   /api/v1/reviews/{id}/compliance-check:
     get:
       summary: List compliance checks for review
@@ -101,11 +230,10 @@ paths:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
+          schema: { type: string }
       responses:
-        '200':
-          description: Compliance checks
+        '200': { description: Compliance checks }
+
   /api/v1/reviews/{id}/approve:
     put:
       summary: Approve review
@@ -113,11 +241,10 @@ paths:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
+          schema: { type: string }
       responses:
-        '200':
-          description: Approve result
+        '200': { description: Approve result }
+
   /api/v1/reviews/{id}/reject:
     put:
       summary: Reject review
@@ -125,14 +252,22 @@ paths:
         - in: path
           name: id
           required: true
-          schema:
-            type: string
+          schema: { type: string }
       responses:
-        '200':
-          description: Reject result
+        '200': { description: Reject result }
+
+  /api/v1/reviews/dashboard/my-workbench:
+    get:
+      summary: Get my review workbench metrics
+      parameters:
+        - in: query
+          name: user
+          schema: { type: string }
+      responses:
+        '200': { description: Workbench metrics }
+
   /api/v1/reviews/dashboard/metrics:
     get:
-      summary: Review dashboard metrics
+      summary: Get review dashboard metrics
       responses:
-        '200':
-          description: Metrics payload
+        '200': { description: Metrics payload }
